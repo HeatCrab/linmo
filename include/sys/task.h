@@ -65,6 +65,9 @@ typedef enum {
 #define TASK_TIMESLICE_LOW 10     /* Low priority: longer slice */
 #define TASK_TIMESLICE_IDLE 15    /* Idle tasks: longest slice */
 
+/* Forward declaration */
+struct memspace;
+
 /* Task Control Block (TCB)
  *
  * Contains all essential information about a single task, including saved
@@ -81,6 +84,9 @@ typedef struct tcb {
     /* Kernel Stack for U-mode Tasks */
     void *kernel_stack; /* Base address of kernel stack (NULL for M-mode) */
     size_t kernel_stack_size; /* Size of kernel stack in bytes (0 for M-mode) */
+
+    /* Memory Protection */
+    struct memspace *mspace; /* Memory space for task isolation */
 
     /* Scheduling Parameters */
     uint16_t prio;      /* Encoded priority (base and time slice counter) */
