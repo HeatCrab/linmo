@@ -3,6 +3,7 @@
 #include <sys/task.h>
 
 #include "csr.h"
+#include "pmp.h"
 #include "private/stdio.h"
 #include "private/utils.h"
 
@@ -294,6 +295,12 @@ void do_trap(uint32_t cause, uint32_t epc)
         const char *reason = "Unknown exception";
         if (code < ARRAY_SIZE(exc_msg) && exc_msg[code])
             reason = exc_msg[code];
+
+        /* Attempt to recover PMP access faults */
+        if ((code == 5 || code == 7) && pmp_handle_access_fault(epc, code == 7) == 0)
+            return;
+
+        /* All other exceptions are fatal */
         printf("[EXCEPTION] code=%u (%s), epc=%08x, cause=%08x\n", code, reason,
                epc, cause);
         hal_panic();
