@@ -27,8 +27,8 @@ fpage_t *mo_fpage_create(uint32_t base,
     fpage->base = base;
     fpage->size = size;
     fpage->rwx = rwx;
-    fpage->pmp_id = 0; /* Not loaded into PMP initially */
-    fpage->flags = 0;  /* No flags set initially */
+    fpage->pmp_id = PMP_INVALID_REGION; /* Not loaded into PMP initially */
+    fpage->flags = 0;                   /* No flags set initially */
     fpage->priority = priority;
     fpage->used = 0; /* Not in use initially */
 
