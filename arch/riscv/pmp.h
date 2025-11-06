@@ -10,6 +10,8 @@
 #include <sys/memprot.h>
 #include <types.h>
 
+#include "csr.h"
+
 /* PMP Region Priority Levels (lower value = higher priority)
  *
  * Used for eviction decisions when hardware PMP regions are exhausted.
@@ -21,6 +23,30 @@ typedef enum {
     PMP_PRIORITY_TEMPORARY = 3,
     PMP_PRIORITY_COUNT = 4
 } pmp_priority_t;
+
+/* PMP TOR Mode Entry Layout
+ *
+ * Kernel regions (0-2) use single entries configured at boot.
+ * User dynamic regions (3+) use paired entries for flexible boundaries:
+ *   - Base entry: Lower bound address
+ *   - Top entry: Upper bound address with permissions
+ * Paired entries enable non-contiguous regions without NAPOT alignment.
+ */
+#define PMP_KERNEL_REGIONS 3    /* Regions 0-2 for kernel */
+#define PMP_USER_REGION_START 3 /* User regions start from 3 */
+#define PMP_ENTRIES_PER_USER 2  /* Each user region uses 2 entries */
+#define PMP_MAX_USER_REGIONS \
+    ((PMP_MAX_REGIONS - PMP_USER_REGION_START) / PMP_ENTRIES_PER_USER)
+
+/* Invalid region marker (fpage not loaded into any PMP region) */
+#define PMP_INVALID_REGION 0xFF
+
+/* Check if a region index is a user region requiring paired entries */
+#define PMP_IS_USER_REGION(idx) ((idx) >= PMP_USER_REGION_START)
+
+/* Convert user region index to hardware entry pair */
+#define PMP_USER_BASE_ENTRY(idx) (idx)
+#define PMP_USER_TOP_ENTRY(idx) ((idx) + 1)
 
 /* PMP Region Configuration */
 typedef struct {
@@ -128,3 +154,15 @@ int32_t pmp_load_fpage(fpage_t *fpage, uint8_t region_idx);
  * Returns 0 on success, or negative error code on failure.
  */
 int32_t pmp_evict_fpage(fpage_t *fpage);
+
+/* Switches PMP configuration during task context switch.
+ *
+ * Evicts the old task's dynamic regions from hardware and loads the new
+ * task's regions into available PMP slots. Kernel regions marked as locked
+ * are preserved across all context switches.
+ *
+ * @old_mspace : Memory space of task being switched out (can be NULL)
+ * @new_mspace : Memory space of task being switched in (can be NULL)
+ * Returns 0 on success, negative error code on failure.
+ */
+int32_t pmp_switch_context(memspace_t *old_mspace, memspace_t *new_mspace);

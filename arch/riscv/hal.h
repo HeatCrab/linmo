@@ -14,6 +14,11 @@ extern uint32_t _heap_start, _heap_end;    /* Start/end of the HEAP memory */
 extern uint32_t _heap_size;                /* Size of HEAP memory */
 extern uint32_t _stack_bottom, _stack_top; /* Bottom/top of the STACK memory */
 
+/* Current trap handler nesting depth. Zero when not in trap context,
+ * increments for each nested trap entry, decrements on exit.
+ */
+extern volatile uint32_t trap_nesting_depth;
+
 /* Read a RISC-V Control and Status Register (CSR).
  * @reg : The symbolic name of the CSR (e.g., mstatus).
  */

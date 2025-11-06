@@ -289,8 +289,6 @@ int32_t pmp_set_region(pmp_config_t *config, const pmp_region_t *region)
     uint8_t pmpcfg_perm =
         region->permissions & (PMPCFG_R | PMPCFG_W | PMPCFG_X);
     uint8_t pmpcfg_byte = PMPCFG_A_TOR | pmpcfg_perm;
-    if (region->locked)
-        pmpcfg_byte |= PMPCFG_L;
 
     /* Read current pmpcfg register to preserve other regions */
     uint32_t pmpcfg_val = read_pmpcfg(pmpcfg_idx);
@@ -486,32 +484,81 @@ static fpage_t __attribute__((unused)) * select_victim_fpage(memspace_t *mspace)
     return victim;
 }
 
+/* Sets base address for a TOR paired region entry */
+static void pmp_set_base_entry(uint8_t entry_idx, uint32_t base_addr)
+{
+    if (entry_idx >= PMP_MAX_REGIONS)
+        return;
+
+    write_pmpaddr(entry_idx, base_addr >> 2);
+}
+
 /* Loads a flexpage into a PMP hardware region */
 int32_t pmp_load_fpage(fpage_t *fpage, uint8_t region_idx)
 {
-    if (!fpage)
+    if (!fpage || region_idx >= PMP_MAX_REGIONS)
         return -1;
 
     pmp_config_t *config = pmp_get_config();
     if (!config)
         return -1;
 
-    /* Configure PMP region from flexpage attributes */
-    pmp_region_t region = {
-        .addr_start = fpage->base,
-        .addr_end = fpage->base + fpage->size,
-        .permissions = fpage->rwx,
-        .priority = fpage->priority,
-        .region_id = region_idx,
-        .locked = 0,
-    };
+    uint32_t base = fpage->base;
+    uint32_t size = fpage->size;
+    uint32_t end = base + size;
 
-    int32_t ret = pmp_set_region(config, &region);
-    if (ret == 0) {
+    /* User regions use paired entries (base + top), kernel regions use single
+     * entry */
+    if (PMP_IS_USER_REGION(region_idx)) {
+        uint8_t base_entry = PMP_USER_BASE_ENTRY(region_idx);
+        uint8_t top_entry = PMP_USER_TOP_ENTRY(region_idx);
+
+        if (top_entry >= PMP_MAX_REGIONS) {
+            return -1;
+        }
+
+        /* Set base entry (address-only, pmpcfg=0) */
+        pmp_set_base_entry(base_entry, base);
+        config->regions[base_entry].addr_start = base;
+        config->regions[base_entry].addr_end = base;
+        config->regions[base_entry].permissions = 0;
+        config->regions[base_entry].locked = 0;
+
+        /* Set top entry (TOR mode with permissions) */
+        pmp_region_t top_region = {
+            .addr_start = base,
+            .addr_end = end,
+            .permissions = fpage->rwx,
+            .priority = fpage->priority,
+            .region_id = top_entry,
+            .locked = 0,
+        };
+
+        int32_t ret = pmp_set_region(config, &top_region);
+        if (ret < 0)
+            return ret;
+
+        fpage->pmp_id = base_entry;
+
+    } else {
+        /* Kernel region: single entry TOR mode */
+        pmp_region_t region = {
+            .addr_start = base,
+            .addr_end = end,
+            .permissions = fpage->rwx,
+            .priority = fpage->priority,
+            .region_id = region_idx,
+            .locked = 0,
+        };
+
+        int32_t ret = pmp_set_region(config, &region);
+        if (ret < 0)
+            return ret;
+
         fpage->pmp_id = region_idx;
     }
 
-    return ret;
+    return 0;
 }
 
 /* Evicts a flexpage from its PMP hardware region */
@@ -521,17 +568,127 @@ int32_t pmp_evict_fpage(fpage_t *fpage)
         return -1;
 
     /* Only evict if actually loaded into PMP */
-    if (fpage->pmp_id == 0)
+    if (fpage->pmp_id == PMP_INVALID_REGION)
         return 0;
 
     pmp_config_t *config = pmp_get_config();
     if (!config)
         return -1;
 
-    int32_t ret = pmp_disable_region(config, fpage->pmp_id);
-    if (ret == 0) {
-        fpage->pmp_id = 0;
+    uint8_t region_idx = fpage->pmp_id;
+
+    /* User regions need to clear both base and top entries */
+    if (PMP_IS_USER_REGION(region_idx)) {
+        uint8_t base_entry = PMP_USER_BASE_ENTRY(region_idx);
+        uint8_t top_entry = PMP_USER_TOP_ENTRY(region_idx);
+
+        /* Clear base entry (address and shadow config) */
+        pmp_set_base_entry(base_entry, 0);
+        config->regions[base_entry].addr_start = 0;
+        config->regions[base_entry].addr_end = 0;
+        config->regions[base_entry].permissions = 0;
+
+        /* Clear top entry using existing pmp_disable_region() */
+        int32_t ret = pmp_disable_region(config, top_entry);
+        if (ret < 0)
+            return ret;
+
+    } else {
+        /* Kernel region uses simple single-entry eviction */
+        int32_t ret = pmp_disable_region(config, region_idx);
+        if (ret < 0)
+            return ret;
     }
 
-    return ret;
+    fpage->pmp_id = PMP_INVALID_REGION;
+    return 0;
+}
+
+/* Finds next available PMP region slot
+ *
+ * User regions require two consecutive free entries.
+ * Kernel regions require single entry.
+ *
+ * Returns region index on success, -1 if none available.
+ */
+static int8_t find_free_region_slot(const pmp_config_t *config)
+{
+    if (!config)
+        return -1;
+
+    for (uint8_t i = 0; i < PMP_MAX_REGIONS; i++) {
+        /* Skip locked regions */
+        if (config->regions[i].locked)
+            continue;
+
+        bool is_free = (config->regions[i].addr_start == 0 &&
+                        config->regions[i].addr_end == 0);
+
+        if (!is_free)
+            continue;
+
+        /* Kernel regions use single entry */
+        if (i < PMP_USER_REGION_START)
+            return i;
+
+        /* User regions need two consecutive slots */
+        if (i + 1 < PMP_MAX_REGIONS) {
+            bool next_is_free = (config->regions[i + 1].addr_start == 0 &&
+                                 config->regions[i + 1].addr_end == 0);
+            bool next_not_locked = !config->regions[i + 1].locked;
+
+            if (next_is_free && next_not_locked)
+                return i;
+        }
+    }
+
+    return -1;
+}
+
+int32_t pmp_switch_context(memspace_t *old_mspace, memspace_t *new_mspace)
+{
+    if (old_mspace == new_mspace) {
+        return 0;
+    }
+
+    pmp_config_t *config = pmp_get_config();
+    if (!config) {
+        return -1;
+    }
+
+    /* Evict old task's dynamic regions */
+    if (old_mspace) {
+        for (fpage_t *fp = old_mspace->pmp_first; fp; fp = fp->pmp_next) {
+            /* pmp_evict_fpage correctly handles paired entries */
+            if (fp->pmp_id != PMP_INVALID_REGION) {
+                pmp_evict_fpage(fp);
+            }
+        }
+    }
+
+    /* Load new task's regions and rebuild tracking list */
+    if (new_mspace) {
+        new_mspace->pmp_first = NULL;
+
+        for (fpage_t *fp = new_mspace->first; fp; fp = fp->as_next) {
+            /* Shared regions may already be loaded */
+            if (fp->pmp_id != PMP_INVALID_REGION) {
+                fp->pmp_next = new_mspace->pmp_first;
+                new_mspace->pmp_first = fp;
+                continue;
+            }
+
+            int32_t region_idx = find_free_region_slot(config);
+            if (region_idx < 0)
+                break;
+
+            if (pmp_load_fpage(fp, (uint8_t) region_idx) != 0)
+                break;
+
+            fp->pmp_next = new_mspace->pmp_first;
+            new_mspace->pmp_first = fp;
+        }
+    }
+
+    return 0;
 }
