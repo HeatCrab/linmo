@@ -44,6 +44,9 @@ static volatile uint32_t timer_work_generation = 0; /* counter for coalescing */
 #define TIMER_WORK_DELAY_UPDATE (1U << 1) /* Task delay processing */
 #define TIMER_WORK_CRITICAL (1U << 2)     /* High-priority timer work */
 
+/* Kernel stack size for U-mode tasks */
+#define KERNEL_STACK_SIZE 1024 /* 1024 bytes per U-mode task */
+
 #if CONFIG_STACK_PROTECTION
 /* Stack canary checking frequency - check every N context switches */
 #define STACK_CHECK_INTERVAL 32
@@ -634,6 +637,10 @@ void dispatch(void)
          * When we return, ISR will restore from next_task's stack.
          */
         hal_switch_stack(&prev_task->sp, next_task->sp);
+
+        /* Update kernel stack for next trap entry */
+        hal_set_kernel_stack(next_task->kernel_stack,
+                             next_task->kernel_stack_size);
     } else {
         /* Cooperative mode: Always call hal_context_restore() because it uses
          * setjmp/longjmp mechanism. Even if same task continues, we must
@@ -723,7 +730,7 @@ static bool init_task_stack(tcb_t *tcb, size_t stack_size)
  */
 static int32_t task_spawn_internal(void *task_entry,
                                    uint16_t stack_size_req,
-                                   bool user_mode)
+                                   task_mode_t mode)
 {
     if (!task_entry)
         panic(ERR_TCB_ALLOC);
@@ -743,7 +750,7 @@ static int32_t task_spawn_internal(void *task_entry,
     tcb->delay = 0;
     tcb->rt_prio = NULL;
     tcb->state = TASK_STOPPED;
-    tcb->mode = user_mode ? TASK_MODE_U : TASK_MODE_M;
+    tcb->mode = mode;
     tcb->in_syscall = false; /* Not in syscall context at creation */
 
     /* Set default priority with proper scheduler fields */
@@ -757,13 +764,38 @@ static int32_t task_spawn_internal(void *task_entry,
         panic(ERR_STACK_ALLOC);
     }
 
-    /* Minimize critical section duration */
+    /* Initialize context BEFORE kernel stack allocation.
+     * If hal_context_init panics, no kernel stack to leak.
+     */
+    hal_context_init(&tcb->context, (size_t) tcb->stack, new_stack_size,
+                     (size_t) task_entry, tcb->mode);
+
+    /* Allocate kernel stack BEFORE adding to task list to prevent race.
+     * If task is added first, another context could cancel it while we're
+     * still allocating, causing use-after-free.
+     */
+    if (tcb->mode) {
+        tcb->kernel_stack = malloc(KERNEL_STACK_SIZE);
+        if (!tcb->kernel_stack) {
+            free(tcb->stack);
+            free(tcb);
+            panic(ERR_STACK_ALLOC);
+        }
+        tcb->kernel_stack_size = KERNEL_STACK_SIZE;
+    } else {
+        tcb->kernel_stack = NULL;
+        tcb->kernel_stack_size = 0;
+    }
+
+    /* Add to task list only after all allocations complete */
     CRITICAL_ENTER();
 
     if (!kcb->tasks) {
         kcb->tasks = list_create();
         if (!kcb->tasks) {
             CRITICAL_LEAVE();
+            if (tcb->kernel_stack)
+                free(tcb->kernel_stack);
             free(tcb->stack);
             free(tcb);
             panic(ERR_KCB_ALLOC);
@@ -773,6 +805,8 @@ static int32_t task_spawn_internal(void *task_entry,
     list_node_t *node = list_pushback(kcb->tasks, tcb);
     if (!node) {
         CRITICAL_LEAVE();
+        if (tcb->kernel_stack)
+            free(tcb->kernel_stack);
         free(tcb->stack);
         free(tcb);
         panic(ERR_TCB_ALLOC);
@@ -787,15 +821,15 @@ static int32_t task_spawn_internal(void *task_entry,
 
     CRITICAL_LEAVE();
 
-    /* Initialize execution context outside critical section. */
-    hal_context_init(&tcb->context, (size_t) tcb->stack, new_stack_size,
-                     (size_t) task_entry, user_mode ? 1 : 0);
-
     /* Initialize SP for preemptive mode.
      * Build initial ISR frame on stack with mepc pointing to task entry.
+     * For U-mode tasks, frame is built on kernel stack; for M-mode on user
+     * stack.
      */
     void *stack_top = (void *) ((uint8_t *) tcb->stack + new_stack_size);
-    tcb->sp = hal_build_initial_frame(stack_top, task_entry, user_mode ? 1 : 0);
+    tcb->sp =
+        hal_build_initial_frame(stack_top, task_entry, tcb->mode,
+                                tcb->kernel_stack, tcb->kernel_stack_size);
 
     printf("task %u: entry=%p stack=%p size=%u mode=%c prio=%u slice=%u\n",
            tcb->id, task_entry, tcb->stack, (unsigned int) new_stack_size,
@@ -834,7 +868,7 @@ int32_t mo_task_spawn_kernel(void *task_entry, uint16_t stack_size)
             return -1;
     }
 
-    return task_spawn_internal(task_entry, stack_size, false);
+    return task_spawn_internal(task_entry, stack_size, TASK_MODE_M);
 }
 
 /* Creates and starts a new task in user mode.
@@ -842,7 +876,7 @@ int32_t mo_task_spawn_kernel(void *task_entry, uint16_t stack_size)
  */
 int32_t mo_task_spawn_user(void *task_entry, uint16_t stack_size)
 {
-    return task_spawn_internal(task_entry, stack_size, true);
+    return task_spawn_internal(task_entry, stack_size, TASK_MODE_U);
 }
 
 int32_t mo_task_cancel(uint16_t id)
@@ -879,6 +913,8 @@ int32_t mo_task_cancel(uint16_t id)
 
     /* Free memory outside critical section */
     free(tcb->stack);
+    if (tcb->kernel_stack)
+        free(tcb->kernel_stack);
     free(tcb);
     return ERR_OK;
 }

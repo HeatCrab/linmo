@@ -109,14 +109,14 @@ void hal_context_restore(jmp_buf env, int32_t val); /* Restore context + process
 The ISR in `boot.c` performs a complete context save of all registers:
 
 ```
-Stack Frame Layout (144 bytes, 33 words × 4 bytes, offsets from sp):
+Stack Frame Layout (144 bytes, 36 words × 4 bytes, offsets from sp):
   0: ra,   4: gp,   8: tp,  12: t0,  16: t1,  20: t2
  24: s0,  28: s1,  32: a0,  36: a1,  40: a2,  44: a3
  48: a4,  52: a5,  56: a6,  60: a7,  64: s2,  68: s3
  72: s4,  76: s5,  80: s6,  84: s7,  88: s8,  92: s9
  96: s10, 100:s11, 104:t3, 108: t4, 112: t5, 116: t6
-120: mcause, 124: mepc, 128: mstatus
-132-143: padding (12 bytes for 16-byte alignment)
+120: mcause, 124: mepc, 128: mstatus, 132: sp (for restore)
+136-143: padding (8 bytes for 16-byte alignment)
 ```
 
 Why full context save in ISR?
@@ -127,12 +127,14 @@ Why full context save in ISR?
 
 ### ISR Stack Requirements
 
-Each task stack must reserve space for the ISR frame:
+Each task requires space for the ISR frame:
 ```c
-#define ISR_STACK_FRAME_SIZE 144  /* 33 words × 4 bytes, 16-byte aligned */
+#define ISR_STACK_FRAME_SIZE 144  /* 36 words × 4 bytes, 16-byte aligned */
 ```
 
-This "red zone" is reserved at the top of every task stack to guarantee ISR safety.
+**M-mode tasks**: This "red zone" is reserved at the top of the task stack to guarantee ISR safety.
+
+**U-mode tasks**: The ISR frame is allocated on the per-task kernel stack (1024 bytes), not on the user stack. This provides stack isolation and prevents user tasks from corrupting kernel trap handling state.
 
 ## Function Calling in Linmo
 
@@ -200,7 +202,9 @@ void task_function(void) {
 
 ### Stack Layout
 
-Each task has its own stack with this layout:
+#### Machine Mode Tasks
+
+Each M-mode task has its own stack with this layout:
 
 ```
 High Address
@@ -215,6 +219,43 @@ High Address
 +------------------+ <- stack_base
 Low Address
 ```
+
+#### User Mode Tasks (Per-Task Kernel Stack)
+
+U-mode tasks maintain separate user and kernel stacks for isolation:
+
+**User Stack** (application execution):
+```
+High Address
++------------------+ <- user_stack_base + user_stack_size
+|                  |
+| User Stack       | <- Grows downward
+| (Dynamic)        | <- Task executes here in U-mode
+|                  |
++------------------+ <- user_stack_base
+Low Address
+```
+
+**Kernel Stack** (trap handling):
+```
+High Address
++------------------+ <- kernel_stack_base + kernel_stack_size (1024 bytes)
+| ISR Frame        | <- 144 bytes for trap context
+| (144 bytes)      | <- Traps switch to this stack
++------------------+
+| Trap Handler     | <- Kernel code execution during traps
+| Stack Space      |
++------------------+ <- kernel_stack_base
+Low Address
+```
+
+When a U-mode task enters a trap (syscall, interrupt, exception):
+1. ISR swaps SP with `mscratch` via `csrrw` (mscratch contains kernel stack top)
+2. ISR saves full context to kernel stack
+3. Trap handler executes on kernel stack
+4. Return path restores user SP and switches back
+
+This dual-stack design prevents user tasks from corrupting kernel state and provides strong isolation between privilege levels.
 
 ### Stack Alignment
 - 16-byte alignment: Required by RISC-V ABI for stack pointer
