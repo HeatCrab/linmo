@@ -3,9 +3,10 @@
 #include <types.h>
 
 /* Symbols from the linker script, defining memory boundaries */
-extern uint32_t _stack_start, _stack_end; /* Start/end of the STACK memory */
-extern uint32_t _heap_start, _heap_end;   /* Start/end of the HEAP memory */
-extern uint32_t _heap_size;               /* Size of HEAP memory */
+extern uint32_t _gp;    /* Global pointer initialized at reset */
+extern uint32_t _stack; /* Kernel stack top for ISR and boot */
+extern uint32_t _heap_start, _heap_end; /* Start/end of the HEAP memory */
+extern uint32_t _heap_size;             /* Size of HEAP memory */
 extern uint32_t _sidata;        /* Start address for .data initialization */
 extern uint32_t _sdata, _edata; /* Start/end address for .data section */
 extern uint32_t _sbss, _ebss;   /* Start/end address for .bss section */
@@ -88,6 +89,13 @@ void hal_dispatch_init(void *ctx);
  */
 void hal_switch_stack(void **old_sp, void *new_sp);
 
+/* Updates the kernel stack top for the current task.
+ * Called by dispatcher during context switch to set up mscratch for next trap.
+ * @kernel_stack: Base address of task's kernel stack (NULL for M-mode tasks)
+ * @kernel_stack_size: Size of kernel stack in bytes (0 for M-mode tasks)
+ */
+void hal_set_kernel_stack(void *kernel_stack, size_t kernel_stack_size);
+
 /* Provides a blocking, busy-wait delay.
  * This function monopolizes the CPU and should only be used for very short
  * delays or in pre-scheduling initialization code.
@@ -112,7 +120,9 @@ void hal_interrupt_tick(void); /* Enable interrupts on first task run */
 void *hal_build_initial_frame(
     void *stack_top,
     void (*task_entry)(void),
-    int user_mode); /* Build ISR frame for preemptive mode */
+    int user_mode,
+    void *kernel_stack,
+    size_t kernel_stack_size); /* Build ISR frame for preemptive mode */
 
 /* Initializes the context structure for a new task.
  * @ctx       : Pointer to jmp_buf to initialize (must be non-NULL).
