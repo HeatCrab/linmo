@@ -37,11 +37,12 @@ enum task_priorities {
 
 /* Task Lifecycle States */
 enum task_states {
-    TASK_STOPPED,  /* Task created but not yet scheduled */
-    TASK_READY,    /* Task in ready state, waiting to be scheduled */
-    TASK_RUNNING,  /* Task currently executing on CPU */
-    TASK_BLOCKED,  /* Task waiting for delay timer to expire */
-    TASK_SUSPENDED /* Task paused/excluded from scheduling until resumed */
+    TASK_STOPPED,   /* Task created but not yet scheduled */
+    TASK_READY,     /* Task in ready state, waiting to be scheduled */
+    TASK_RUNNING,   /* Task currently executing on CPU */
+    TASK_BLOCKED,   /* Task waiting for delay timer to expire */
+    TASK_SUSPENDED, /* Task paused/excluded from scheduling until resumed */
+    TASK_ZOMBIE     /* Task terminated, awaiting resource cleanup */
 };
 
 /* Task Privilege Mode */

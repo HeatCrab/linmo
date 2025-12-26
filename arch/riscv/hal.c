@@ -3,6 +3,7 @@
 #include <sys/task.h>
 
 #include "csr.h"
+#include "pmp.h"
 #include "private/stdio.h"
 #include "private/utils.h"
 
@@ -475,6 +476,41 @@ uint32_t do_trap(uint32_t cause, uint32_t epc, uint32_t isr_sp)
                     pending_switch_sp ? (uint32_t) pending_switch_sp : isr_sp;
             }
             goto trap_exit;
+        }
+
+        /* Attempt to recover load/store access faults.
+         *
+         * This assumes all U-mode access faults are PMP-related, which holds
+         * for platforms without MMU where PMP is the sole memory protection.
+         * On MCU hardware, bus faults or access to non-existent memory may
+         * also trigger access exceptions, and terminating the task instead
+         * of panicking could hide such hardware issues.
+         */
+        if (code == 5 || code == 7) {
+            uint32_t mtval = read_csr(mtval);
+            int32_t pmp_result = pmp_handle_access_fault(mtval, code == 7);
+            if (pmp_result == PMP_FAULT_RECOVERED) {
+                /* PMP fault handled successfully, return current frame */
+                return isr_sp;
+            }
+            if (pmp_result == PMP_FAULT_TERMINATE) {
+                /* Task terminated (marked as zombie), switch to next task.
+                 * Print diagnostic before switching. */
+                trap_puts("[PMP] Task terminated: ");
+                trap_puts(code == 7 ? "Store" : "Load");
+                trap_puts(" access fault at 0x");
+                for (int i = 28; i >= 0; i -= 4) {
+                    uint32_t nibble = (mtval >> i) & 0xF;
+                    _putchar(nibble < 10 ? '0' + nibble : 'A' + nibble - 10);
+                }
+                trap_puts("\r\n");
+
+                /* Force context switch to next task */
+                dispatcher(0);
+                ret_sp =
+                    pending_switch_sp ? (uint32_t) pending_switch_sp : isr_sp;
+                goto trap_exit;
+            }
         }
 
         /* Print exception info via direct UART (safe in trap context) */

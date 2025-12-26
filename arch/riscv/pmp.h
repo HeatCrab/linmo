@@ -155,6 +155,24 @@ int32_t pmp_load_fpage(fpage_t *fpage, uint8_t region_idx);
  */
 int32_t pmp_evict_fpage(fpage_t *fpage);
 
+/* PMP Fault Handler Return Codes */
+#define PMP_FAULT_RECOVERED 0    /* Fault recovered, resume execution */
+#define PMP_FAULT_UNHANDLED (-1) /* Cannot recover, fall through to default */
+#define PMP_FAULT_TERMINATE \
+    (-2) /* Task terminated, caller invokes dispatcher */
+
+/* Handles PMP access violations.
+ *
+ * Attempts to recover from PMP access faults by loading the required memory
+ * region into a hardware PMP region. If all 16 regions are in use, selects a
+ * victim for eviction and reuses its region.
+ *
+ * @fault_addr : The faulting memory address (from mtval CSR)
+ * @is_write : 1 for store/AMO access, 0 for load
+ * Returns PMP_FAULT_RECOVERED, PMP_FAULT_UNHANDLED, or PMP_FAULT_TERMINATE.
+ */
+int32_t pmp_handle_access_fault(uint32_t fault_addr, uint8_t is_write);
+
 /* Switches PMP configuration during task context switch.
  *
  * Evicts the old task's dynamic regions from hardware and loads the new

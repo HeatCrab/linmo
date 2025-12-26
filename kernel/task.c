@@ -380,6 +380,46 @@ void yield(void);
 void _dispatch(void) __attribute__((weak, alias("dispatch")));
 void _yield(void) __attribute__((weak, alias("yield")));
 
+/* Zombie Task Cleanup
+ *
+ * Scans the task list for terminated (zombie) tasks and frees their resources.
+ * Called from dispatcher to ensure cleanup happens in a safe context.
+ */
+static void task_cleanup_zombies(void)
+{
+    if (!kcb || !kcb->tasks)
+        return;
+
+    list_node_t *node = list_next(kcb->tasks->head);
+    while (node && node != kcb->tasks->tail) {
+        list_node_t *next = list_next(node);
+        tcb_t *tcb = node->data;
+
+        if (tcb && tcb->state == TASK_ZOMBIE) {
+            /* Remove from task list */
+            list_remove(kcb->tasks, node);
+            kcb->task_count--;
+
+            /* Clear from lookup cache */
+            for (int i = 0; i < TASK_CACHE_SIZE; i++) {
+                if (task_cache[i].task == tcb) {
+                    task_cache[i].id = 0;
+                    task_cache[i].task = NULL;
+                }
+            }
+
+            /* Free all resources */
+            if (tcb->mspace)
+                mo_memspace_destroy(tcb->mspace);
+            free(tcb->stack);
+            if (tcb->kernel_stack)
+                free(tcb->kernel_stack);
+            free(tcb);
+        }
+        node = next;
+    }
+}
+
 /* Round-Robin Scheduler Implementation
  *
  * Implements an efficient round-robin scheduler tweaked for small systems.
@@ -559,6 +599,9 @@ void dispatch(void)
 {
     if (unlikely(!kcb || !kcb->task_current || !kcb->task_current->data))
         panic(ERR_NO_TASKS);
+
+    /* Clean up any terminated (zombie) tasks */
+    task_cleanup_zombies();
 
     /* Save current context - only needed for cooperative mode.
      * In preemptive mode, ISR already saved context to stack,
@@ -980,6 +1023,8 @@ int32_t mo_task_cancel(uint16_t id)
     CRITICAL_LEAVE();
 
     /* Free memory outside critical section */
+    if (tcb->mspace)
+        mo_memspace_destroy(tcb->mspace);
     free(tcb->stack);
     if (tcb->kernel_stack)
         free(tcb->kernel_stack);

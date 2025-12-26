@@ -5,6 +5,7 @@
 
 #include <hal.h>
 #include <lib/libc.h>
+#include <sys/task.h>
 
 #include "csr.h"
 #include "pmp.h"
@@ -464,7 +465,7 @@ int32_t pmp_check_access(const pmp_config_t *config,
  * @mspace : Pointer to memory space
  * Returns pointer to victim flexpage, or NULL if no evictable page found.
  */
-static fpage_t __attribute__((unused)) * select_victim_fpage(memspace_t *mspace)
+static fpage_t *select_victim_fpage(memspace_t *mspace)
 {
     if (!mspace)
         return NULL;
@@ -604,6 +605,73 @@ int32_t pmp_evict_fpage(fpage_t *fpage)
     return 0;
 }
 
+/* Atomically replaces a victim flexpage with a target flexpage in hardware.
+ *
+ * Captures victim's PMP ID before eviction to avoid use-after-invalidation.
+ *
+ * @victim : Flexpage to evict (must be currently loaded)
+ * @target : Flexpage to load (must not be currently loaded)
+ * Returns 0 on success, negative error code on failure.
+ */
+static int32_t replace_fpage(fpage_t *victim, fpage_t *target)
+{
+    if (!victim || !target)
+        return -1;
+
+    /* Capture region ID before eviction invalidates it */
+    uint8_t region_idx = victim->pmp_id;
+
+    /* Evict victim from hardware */
+    int32_t ret = pmp_evict_fpage(victim);
+    if (ret != 0)
+        return ret;
+
+    /* Load target into the freed slot */
+    return pmp_load_fpage(target, region_idx);
+}
+
+/* Handles PMP access faults by loading the required flexpage into hardware. */
+int32_t pmp_handle_access_fault(uint32_t fault_addr, uint8_t is_write)
+{
+    if (!kcb || !kcb->task_current || !kcb->task_current->data)
+        return PMP_FAULT_UNHANDLED;
+
+    tcb_t *current = (tcb_t *) kcb->task_current->data;
+    memspace_t *mspace = current->mspace;
+    if (!mspace)
+        return PMP_FAULT_UNHANDLED;
+
+    /* Find flexpage containing faulting address */
+    fpage_t *target_fpage = NULL;
+    for (fpage_t *fp = mspace->first; fp; fp = fp->as_next) {
+        if (fault_addr >= fp->base && fault_addr < (fp->base + fp->size)) {
+            target_fpage = fp;
+            break;
+        }
+    }
+
+    /* Cannot recover: address not in task's memory space or already loaded */
+    if (!target_fpage || target_fpage->pmp_id != PMP_INVALID_REGION) {
+        /* Mark task as zombie for deferred cleanup */
+        current->state = TASK_ZOMBIE;
+        return PMP_FAULT_TERMINATE;
+    }
+
+    pmp_config_t *config = pmp_get_config();
+    if (!config)
+        return PMP_FAULT_UNHANDLED;
+
+    /* Load into available region or evict victim */
+    if (config->next_region_idx < PMP_MAX_REGIONS)
+        return pmp_load_fpage(target_fpage, config->next_region_idx);
+
+    fpage_t *victim = select_victim_fpage(mspace);
+    if (!victim)
+        return PMP_FAULT_UNHANDLED;
+
+    /* Use helper to safely replace victim with target */
+    return replace_fpage(victim, target_fpage);
+}
 /* Finds next available PMP region slot
  *
  * User regions require two consecutive free entries.

@@ -56,6 +56,12 @@ int32_t mo_evict_fpage(fpage_t *fpage)
     return pmp_evict_fpage(fpage);
 }
 
+/* Handles memory access faults */
+int32_t mo_handle_access_fault(uint32_t fault_addr, uint8_t is_write)
+{
+    return pmp_handle_access_fault(fault_addr, is_write);
+}
+
 /* Creates and initializes a memory space */
 memspace_t *mo_memspace_create(uint32_t as_id, uint32_t shared)
 {
@@ -78,10 +84,13 @@ void mo_memspace_destroy(memspace_t *mspace)
     if (!mspace)
         return;
 
-    /* Free all flexpages in the list */
+    /* Evict and free all flexpages in the list */
     fpage_t *fp = mspace->first;
     while (fp) {
         fpage_t *next = fp->as_next;
+        /* Evict from PMP hardware before freeing to prevent stale references */
+        if (fp->pmp_id != PMP_INVALID_REGION)
+            pmp_evict_fpage(fp);
         mo_fpage_destroy(fp);
         fp = next;
     }
