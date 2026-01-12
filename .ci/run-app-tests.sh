@@ -26,7 +26,10 @@ test_app() {
     exit_code=$?
 
     # Check phase
-    if echo "$output" | grep -qiE "(trap|exception|fault|panic|illegal|segfault)"; then
+    # Filter out expected PMP termination messages before crash detection
+    local filtered_output
+    filtered_output=$(echo "$output" | grep -v "\[PMP\] Task terminated")
+    if echo "$filtered_output" | grep -qiE "(trap|exception|fault|panic|illegal|segfault)"; then
         echo "[!] Crash detected"
         return 1
     elif [ $exit_code -eq 124 ] || [ $exit_code -eq 0 ]; then

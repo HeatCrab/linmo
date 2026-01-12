@@ -165,7 +165,7 @@ void *hal_build_initial_frame(void *stack_top,
     frame[FRAME_EPC] = (uint32_t) task_entry;
 
     /* SP value for when ISR returns (stored in frame[33]).
-     * For U-mode: Set to user stack top.
+     * For U-mode: Set to user stack top minus 256-byte guard zone.
      * For M-mode: Set to frame + ISR_STACK_FRAME_SIZE.
      */
     if (user_mode && kernel_stack) {
