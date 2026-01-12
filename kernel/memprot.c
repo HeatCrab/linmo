@@ -84,10 +84,13 @@ void mo_memspace_destroy(memspace_t *mspace)
     if (!mspace)
         return;
 
-    /* Free all flexpages in the list */
+    /* Evict and free all flexpages in the list */
     fpage_t *fp = mspace->first;
     while (fp) {
         fpage_t *next = fp->as_next;
+        /* Evict from PMP hardware before freeing to prevent stale references */
+        if (fp->pmp_id != PMP_INVALID_REGION)
+            pmp_evict_fpage(fp);
         mo_fpage_destroy(fp);
         fp = next;
     }
