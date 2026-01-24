@@ -98,7 +98,7 @@ $(BUILD_DIR)/code.txt: $(IMAGE_BASE).bin
 # Utility targets
 rebuild:
 	$(Q)find '$(BUILD_APP_DIR)' -type f -name '*.o' -delete 2>/dev/null || true
-	$(Q)mkdir -p $(BUILD_APP_DIR)
+	$(Q)mkdir -p $(BUILD_APP_DIR) $(BUILD_KERNEL_DIR) $(BUILD_LIB_DIR)
 
 clean:
 	$(VECHO) "Cleaning build artifacts...\n"
