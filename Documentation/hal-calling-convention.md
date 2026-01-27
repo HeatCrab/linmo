@@ -141,9 +141,9 @@ This "red zone" is reserved at the top of every task stack to guarantee ISR safe
 Standard RISC-V calling convention applies:
 
 ```c
-/* Example: mo_task_spawn(entry, stack_size) */
-/* a0 = entry, a1 = stack_size, return value in a0 */
-int32_t result = mo_task_spawn(task_function, 2048);
+/* Example: mo_task_spawn(entry, stack_size, mode) */
+/* a0 = entry, a1 = stack_size, a2 = mode, return value in a0 */
+int32_t result = mo_task_spawn(task_function, 2048, TASK_MODE_M);
 ```
 
 ### System Call Interface

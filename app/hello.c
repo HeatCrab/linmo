@@ -37,9 +37,9 @@ void task0(void)
 
 int32_t app_main(void)
 {
-    mo_task_spawn(task0, DEFAULT_STACK_SIZE);
-    mo_task_spawn(task1, DEFAULT_STACK_SIZE);
-    mo_task_spawn(task2, DEFAULT_STACK_SIZE);
+    mo_task_spawn(task0, DEFAULT_STACK_SIZE, TASK_MODE_M);
+    mo_task_spawn(task1, DEFAULT_STACK_SIZE, TASK_MODE_M);
+    mo_task_spawn(task2, DEFAULT_STACK_SIZE, TASK_MODE_M);
 
     mo_task_priority(2, TASK_PRIO_LOW);
 

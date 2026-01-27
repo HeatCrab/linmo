@@ -38,10 +38,10 @@ void idle(void)
 
 int32_t app_main(void)
 {
-    mo_task_spawn(timer1, DEFAULT_STACK_SIZE);
-    mo_task_spawn(timer2, DEFAULT_STACK_SIZE);
-    mo_task_spawn(timer3, DEFAULT_STACK_SIZE);
-    mo_task_spawn(idle, DEFAULT_STACK_SIZE);
+    mo_task_spawn(timer1, DEFAULT_STACK_SIZE, TASK_MODE_M);
+    mo_task_spawn(timer2, DEFAULT_STACK_SIZE, TASK_MODE_M);
+    mo_task_spawn(timer3, DEFAULT_STACK_SIZE, TASK_MODE_M);
+    mo_task_spawn(idle, DEFAULT_STACK_SIZE, TASK_MODE_M);
 
     /* preemptive mode */
     return 1;

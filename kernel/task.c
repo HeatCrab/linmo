@@ -712,10 +712,9 @@ static bool init_task_stack(tcb_t *tcb, size_t stack_size)
 
 /* Task Management API */
 
-/* Internal task spawning implementation with privilege mode control */
-static int32_t task_spawn_impl(void *task_entry,
-                               uint16_t stack_size_req,
-                               int user_mode)
+int32_t mo_task_spawn(void *task_entry,
+                      uint16_t stack_size_req,
+                      task_mode_t mode)
 {
     if (!task_entry)
         panic(ERR_TCB_ALLOC);
@@ -779,6 +778,7 @@ static int32_t task_spawn_impl(void *task_entry,
     CRITICAL_LEAVE();
 
     /* Initialize execution context outside critical section. */
+    int user_mode = (mode == TASK_MODE_U);
     hal_context_init(&tcb->context, (size_t) tcb->stack, new_stack_size,
                      (size_t) task_entry, user_mode);
 
@@ -797,16 +797,6 @@ static int32_t task_spawn_impl(void *task_entry,
     sched_enqueue_task(tcb);
 
     return tcb->id;
-}
-
-int32_t mo_task_spawn(void *task_entry, uint16_t stack_size_req)
-{
-    return task_spawn_impl(task_entry, stack_size_req, false);
-}
-
-int32_t mo_task_spawn_user(void *task_entry, uint16_t stack_size_req)
-{
-    return task_spawn_impl(task_entry, stack_size_req, true);
 }
 
 int32_t mo_task_cancel(uint16_t id)

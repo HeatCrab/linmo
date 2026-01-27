@@ -17,6 +17,11 @@ DEFINES := -DF_CPU=$(F_CLK) \
            -DF_TIMER=$(F_TICK) \
            -include config.h
 
+# Privileged mode: app_main() runs in M-mode instead of default U-mode
+ifdef CONFIG_PRIVILEGED
+DEFINES += -DCONFIG_PRIVILEGED=1
+endif
+
 CROSS_COMPILE ?= riscv-none-elf-
 
 # Detect LLVM/Clang toolchain
