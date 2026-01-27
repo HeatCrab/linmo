@@ -64,11 +64,10 @@ int32_t app_main(void)
 {
     umode_printf("[Kernel] Spawning U-mode validation task...\n");
 
-    /* app_main is called from kernel context during bootstrap.
-     * Use mo_task_spawn_user to create the validation task in user mode.
-     * This ensures privilege isolation is properly tested.
+    /* app_main now runs in U-mode by default.
+     * Use sys_tadd syscall to create additional U-mode tasks.
      */
-    mo_task_spawn_user(umode_validation_task, DEFAULT_STACK_SIZE);
+    sys_tadd(umode_validation_task, DEFAULT_STACK_SIZE);
 
     /* Return 1 to enable preemptive scheduler */
     return 1;

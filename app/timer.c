@@ -63,7 +63,7 @@ int32_t app_main(void)
     mo_timer_start(0x6002, TIMER_AUTORELOAD);
 
     /* Spawn a single idle task to keep the kernel running. */
-    mo_task_spawn(idle_task, DEFAULT_STACK_SIZE);
+    mo_task_spawn(idle_task, DEFAULT_STACK_SIZE, TASK_MODE_M);
 
     /* preemptive mode */
     return 1;

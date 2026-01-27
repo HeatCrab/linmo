@@ -57,10 +57,10 @@ void task0(void)
 
 int32_t app_main(void)
 {
-    mo_task_spawn(task0, DEFAULT_STACK_SIZE);
-    mo_task_spawn(task1, DEFAULT_STACK_SIZE);
-    mo_task_spawn(task2, DEFAULT_STACK_SIZE);
-    mo_task_spawn(task3, DEFAULT_STACK_SIZE);
+    mo_task_spawn(task0, DEFAULT_STACK_SIZE, TASK_MODE_M);
+    mo_task_spawn(task1, DEFAULT_STACK_SIZE, TASK_MODE_M);
+    mo_task_spawn(task2, DEFAULT_STACK_SIZE, TASK_MODE_M);
+    mo_task_spawn(task3, DEFAULT_STACK_SIZE, TASK_MODE_M);
 
     pipe1 = mo_pipe_create(
         128); /* pipe buffer, 128 bytes (allocated on the heap) */

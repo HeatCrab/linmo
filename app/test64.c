@@ -86,7 +86,7 @@ void task(void)
 
 int32_t app_main()
 {
-    mo_task_spawn(task, DEFAULT_STACK_SIZE);
+    mo_task_spawn(task, DEFAULT_STACK_SIZE, TASK_MODE_M);
 
     return 1;
 }

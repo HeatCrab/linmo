@@ -44,6 +44,12 @@ enum task_states {
     TASK_SUSPENDED /* Task paused/excluded from scheduling until resumed */
 };
 
+/* Task Privilege Mode */
+typedef enum {
+    TASK_MODE_M, /* Machine mode - full hardware access */
+    TASK_MODE_U  /* User mode - restricted, uses syscalls */
+} task_mode_t;
+
 /* Priority Level Constants for Priority-Aware Time Slicing */
 #define TASK_PRIORITY_LEVELS 8  /* Number of priority levels (0-7) */
 #define TASK_HIGHEST_PRIORITY 0 /* Highest priority level */
@@ -187,24 +193,14 @@ void _yield(void);
 
 /* Task Lifecycle Management */
 
-/* Creates and starts a new task in machine mode.
+/* Creates and starts a new task.
  * @task_entry : Pointer to the task's entry function (void func(void))
  * @stack_size : The desired stack size in bytes (minimum is enforced)
+ * @mode       : Privilege mode (TASK_MODE_M or TASK_MODE_U)
  *
  * Returns the new task's ID on success. Panics on memory allocation failure.
  */
-int32_t mo_task_spawn(void *task_entry, uint16_t stack_size);
-
-/* Creates and starts a new task in user mode.
- * User mode tasks run with reduced privileges and must use syscalls to access
- * kernel services. This provides memory protection and privilege separation.
- *
- * @task_entry : Pointer to the task's entry function (void func(void))
- * @stack_size : The desired stack size in bytes (minimum is enforced)
- *
- * Returns the new task's ID on success. Panics on memory allocation failure.
- */
-int32_t mo_task_spawn_user(void *task_entry, uint16_t stack_size);
+int32_t mo_task_spawn(void *task_entry, uint16_t stack_size, task_mode_t mode);
 
 /* Cancels and removes a task from the system. A task cannot cancel itself.
  * @id : The ID of the task to cancel

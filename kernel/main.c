@@ -1,9 +1,25 @@
 #include <hal.h>
 #include <lib/libc.h>
 #include <sys/logger.h>
+#include <sys/syscall.h>
 #include <sys/task.h>
 
 #include "private/error.h"
+
+#ifndef CONFIG_PRIVILEGED
+/* Wrapper to run app_main() in U-mode.
+ *
+ * In U-mode, the return value cannot control preemptive mode (kcb is
+ * inaccessible), so it's ignored. The infinite loop keeps the task alive
+ * after app_main() returns.
+ */
+static void app_main_wrapper(void)
+{
+    app_main();
+    for (;;)
+        sys_tyield();
+}
+#endif
 
 /* C-level entry point for the kernel.
  *
@@ -42,8 +58,15 @@ int32_t main(void)
         printf("Logger initialized\n");
     }
 
-    /* Call the application's main entry point to create initial tasks. */
+#ifdef CONFIG_PRIVILEGED
+    /* M-mode: app_main() controls preemptive mode via return value */
     kcb->preemptive = (bool) app_main();
+#else
+    /* U-mode: preemptive mode fixed, app_main() runs as user task */
+    kcb->preemptive = true;
+    mo_task_spawn(app_main_wrapper, DEFAULT_STACK_SIZE, TASK_MODE_U);
+#endif
+
     printf("Scheduler mode: %s\n",
            kcb->preemptive ? "Preemptive" : "Cooperative");
 

@@ -247,7 +247,8 @@ static int _tadd(void *task, int stack_size)
     if (unlikely(!task || stack_size <= 0))
         return -EINVAL;
 
-    return mo_task_spawn(task, stack_size);
+    /* Syscall always creates U-mode tasks for security */
+    return mo_task_spawn(task, stack_size, TASK_MODE_U);
 }
 
 int sys_tadd(void *task, int stack_size)

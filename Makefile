@@ -9,6 +9,17 @@ BUILD_APP_DIR := $(BUILD_DIR)/app
 BUILD_KERNEL_DIR := $(BUILD_DIR)/kernel
 BUILD_LIB_DIR := $(BUILD_DIR)/lib
 
+# Apps requiring M-mode (kernel API tests)
+# All other apps run in U-mode by default (secure)
+MMODE_APPS := cond coop cpubench echo hello mqueues mutex \
+              pipes pipes_small pipes_struct prodcons progress \
+              rtsched semaphore suspend test64 test_libc timer timer_kill
+
+# Auto-detect: if building an M-mode app, enable CONFIG_PRIVILEGED
+ifneq ($(filter $(MAKECMDGOALS),$(MMODE_APPS)),)
+CONFIG_PRIVILEGED := 1
+endif
+
 include mk/common.mk
 # architecture-specific settings
 include arch/$(ARCH)/build.mk
@@ -97,7 +108,8 @@ $(BUILD_DIR)/code.txt: $(IMAGE_BASE).bin
 
 # Utility targets
 rebuild:
-	$(Q)find '$(BUILD_APP_DIR)' -type f -name '*.o' -delete 2>/dev/null || true
+	$(Q)find '$(BUILD_APP_DIR)' '$(BUILD_KERNEL_DIR)' -type f -name '*.o' -delete 2>/dev/null || true
+	$(Q)rm -f '$(BUILD_DIR)/liblinmo.a' 2>/dev/null || true
 	$(Q)mkdir -p $(BUILD_APP_DIR) $(BUILD_KERNEL_DIR) $(BUILD_LIB_DIR)
 
 clean:
