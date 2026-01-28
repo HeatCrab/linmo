@@ -5,6 +5,7 @@
 #include <sys/task.h>
 
 #include "private/error.h"
+#include "private/task.h"
 
 #ifndef CONFIG_PRIVILEGED
 /* Wrapper to run app_main() in U-mode.
@@ -64,7 +65,7 @@ int32_t main(void)
 #else
     /* U-mode: preemptive mode fixed, app_main() runs as user task */
     kcb->preemptive = true;
-    mo_task_spawn(app_main_wrapper, DEFAULT_STACK_SIZE, TASK_MODE_U);
+    mo_task_spawn_user(app_main_wrapper, DEFAULT_STACK_SIZE);
 #endif
 
     printf("Scheduler mode: %s\n",

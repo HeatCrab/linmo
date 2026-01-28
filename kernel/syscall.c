@@ -4,7 +4,15 @@
 #include <sys/task.h>
 
 #include "private/stdio.h"
+#include "private/task.h"
 #include "private/utils.h"
+
+/* Syscall context flag for privilege enforcement.
+ * When set, kernel APIs that check privilege will reject M-mode requests.
+ * This prevents privilege escalation if U-mode code somehow calls kernel
+ * functions directly (defense-in-depth alongside hardware protection).
+ */
+volatile bool in_syscall_context = false;
 
 /* syscall wrappers */
 #define _(name, num, rettype, arglist) static rettype _##name arglist;
@@ -19,6 +27,9 @@ static const void *syscall_table[SYS_COUNT] = {SYSCALL_TABLE};
 /* Core syscall execution via direct table lookup.
  * Called by trap handlers to invoke syscall implementations without
  * triggering privilege transitions. User space must not call this directly.
+ *
+ * Sets in_syscall_context flag during execution to enable runtime privilege
+ * checks in kernel APIs (defense-in-depth for mo_task_spawn_kernel).
  */
 int do_syscall(int num, void *a1, void *a2, void *a3)
 {
@@ -28,7 +39,13 @@ int do_syscall(int num, void *a1, void *a2, void *a3)
     if (unlikely(!syscall_table[num]))
         return -ENOSYS;
 
-    return ((int (*)(void *, void *, void *)) syscall_table[num])(a1, a2, a3);
+    /* Mark syscall context for privilege enforcement */
+    in_syscall_context = true;
+    int result =
+        ((int (*)(void *, void *, void *)) syscall_table[num])(a1, a2, a3);
+    in_syscall_context = false;
+
+    return result;
 }
 
 /* Generic user-space syscall interface.
@@ -242,18 +259,18 @@ static int _link(char *old, char *new)
 
 /* Linmo syscalls (wrapper implementation) */
 
-static int _tadd(void *task, int stack_size)
+static int _task_spawn(void *task, int stack_size)
 {
     if (unlikely(!task || stack_size <= 0))
         return -EINVAL;
 
     /* Syscall always creates U-mode tasks for security */
-    return mo_task_spawn(task, stack_size, TASK_MODE_U);
+    return mo_task_spawn_user(task, stack_size);
 }
 
-int sys_tadd(void *task, int stack_size)
+int sys_task_spawn(void *task, int stack_size)
 {
-    return syscall(SYS_tadd, task, (void *) stack_size, 0);
+    return syscall(SYS_task_spawn, task, (void *) stack_size, 0);
 }
 
 static int _tcancel(int id)

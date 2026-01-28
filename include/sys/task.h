@@ -85,7 +85,7 @@ typedef struct tcb {
     uint16_t delay;     /* Ticks remaining for task in TASK_BLOCKED state */
     uint16_t id;        /* Unique task ID, assigned by kernel upon creation */
     uint8_t state;      /* Current lifecycle state (e.g., TASK_READY) */
-    uint8_t flags;      /* Task flags for future extensions (reserved) */
+    task_mode_t mode;   /* Privilege mode: TASK_MODE_M or TASK_MODE_U */
 
     /* Real-time Scheduling Support */
     void *rt_prio; /* Opaque pointer for custom real-time scheduler hook */
@@ -193,14 +193,26 @@ void _yield(void);
 
 /* Task Lifecycle Management */
 
-/* Creates and starts a new task.
+/* Application task creation macro.
  * @task_entry : Pointer to the task's entry function (void func(void))
  * @stack_size : The desired stack size in bytes (minimum is enforced)
- * @mode       : Privilege mode (TASK_MODE_M or TASK_MODE_U)
  *
  * Returns the new task's ID on success. Panics on memory allocation failure.
+ *
+ * Routes to the correct implementation based on build configuration:
+ * - CONFIG_PRIVILEGED: Direct kernel call (M-mode task creation)
+ * - Otherwise: Syscall wrapper (U-mode task creation, hardware enforced)
  */
-int32_t mo_task_spawn(void *task_entry, uint16_t stack_size, task_mode_t mode);
+#ifdef CONFIG_PRIVILEGED
+/* Include private header for kernel-internal function (not exposed to apps) */
+#include "private/task.h"
+#define mo_task_spawn(task_entry, stack_size) \
+    mo_task_spawn_kernel((task_entry), (stack_size))
+#else
+int sys_task_spawn(void *task, int stack_size);
+#define mo_task_spawn(task_entry, stack_size) \
+    sys_task_spawn((task_entry), (stack_size))
+#endif
 
 /* Cancels and removes a task from the system. A task cannot cancel itself.
  * @id : The ID of the task to cancel

@@ -36,9 +36,9 @@ int32_t app_main(void)
     int32_t i;
 
     for (i = 0; i < N_TASKS; i++)
-        mo_task_spawn(task, DEFAULT_STACK_SIZE, TASK_MODE_M);
+        mo_task_spawn(task, DEFAULT_STACK_SIZE);
     // add logger task
-    mo_task_spawn(logger, DEFAULT_STACK_SIZE, TASK_MODE_M);
+    mo_task_spawn(logger, DEFAULT_STACK_SIZE);
 
     /* preemptive mode */
     return 1;

@@ -27,8 +27,8 @@ void umode_validation_task(void)
         umode_printf("[umode] FAIL: sys_uptime() failed (ret=%d)\n", uptime);
     }
 
-    /* Note: Skipping sys_tadd for now, as kernel user pointer checks might
-     * block function pointers in the .text segment, avoiding distraction.
+    /* Note: Skipping sys_task_spawn for now, as kernel user pointer checks
+     * might block function pointers in the .text segment, avoiding distraction.
      */
 
     /* --- Phase 2: Security Check (Privileged Access) --- */
@@ -65,9 +65,10 @@ int32_t app_main(void)
     umode_printf("[Kernel] Spawning U-mode validation task...\n");
 
     /* app_main now runs in U-mode by default.
-     * Use sys_tadd syscall to create additional U-mode tasks.
+     * mo_task_spawn routes to sys_task_spawn syscall for U-mode apps,
+     * ensuring consistent API usage across the codebase.
      */
-    sys_tadd(umode_validation_task, DEFAULT_STACK_SIZE);
+    mo_task_spawn(umode_validation_task, DEFAULT_STACK_SIZE);
 
     /* Return 1 to enable preemptive scheduler */
     return 1;

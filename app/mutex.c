@@ -191,10 +191,10 @@ int32_t app_main(void)
     printf("Binary semaphore created successfully\n");
 
     /* Create tasks */
-    int32_t task_a_id = mo_task_spawn(task_a, 1024, TASK_MODE_M);
-    int32_t task_b_id = mo_task_spawn(task_b, 1024, TASK_MODE_M);
-    int32_t monitor_id = mo_task_spawn(monitor_task, 1024, TASK_MODE_M);
-    int32_t idle_id = mo_task_spawn(idle_task, 512, TASK_MODE_M);
+    int32_t task_a_id = mo_task_spawn(task_a, 1024);
+    int32_t task_b_id = mo_task_spawn(task_b, 1024);
+    int32_t monitor_id = mo_task_spawn(monitor_task, 1024);
+    int32_t idle_id = mo_task_spawn(idle_task, 512);
 
     if (task_a_id < 0 || task_b_id < 0 || monitor_id < 0 || idle_id < 0) {
         printf("FATAL: Failed to create tasks\n");

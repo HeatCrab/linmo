@@ -13,6 +13,11 @@
 #include "private/error.h"
 #include "private/utils.h"
 
+/* Syscall context flag from syscall.c for runtime privilege enforcement.
+ * When true, M-mode task creation requests are rejected (defense-in-depth).
+ */
+extern volatile bool in_syscall_context;
+
 static int32_t noop_rtsched(void);
 void _timer_tick_handler(void);
 
@@ -69,6 +74,12 @@ static const uint8_t priority_timeslices[TASK_PRIORITY_LEVELS] = {
     TASK_TIMESLICE_BELOW,    /* Priority 5: Below normal */
     TASK_TIMESLICE_LOW,      /* Priority 6: Low */
     TASK_TIMESLICE_IDLE      /* Priority 7: Idle */
+};
+
+/* Task mode to display character mapping (extensible for future modes) */
+static const char task_mode_chars[] = {
+    [TASK_MODE_M] = 'M', /* Machine mode */
+    [TASK_MODE_U] = 'U', /* User mode */
 };
 
 /* Mark task as ready (state-based) */
@@ -712,9 +723,12 @@ static bool init_task_stack(tcb_t *tcb, size_t stack_size)
 
 /* Task Management API */
 
-int32_t mo_task_spawn(void *task_entry,
-                      uint16_t stack_size_req,
-                      task_mode_t mode)
+/* Internal task spawn implementation.
+ * Centralizes task creation logic, called by public M-mode and U-mode wrappers.
+ */
+static int32_t task_spawn_internal(void *task_entry,
+                                   uint16_t stack_size_req,
+                                   bool user_mode)
 {
     if (!task_entry)
         panic(ERR_TCB_ALLOC);
@@ -734,7 +748,7 @@ int32_t mo_task_spawn(void *task_entry,
     tcb->delay = 0;
     tcb->rt_prio = NULL;
     tcb->state = TASK_STOPPED;
-    tcb->flags = 0;
+    tcb->mode = user_mode ? TASK_MODE_U : TASK_MODE_M;
 
     /* Set default priority with proper scheduler fields */
     tcb->prio = TASK_PRIO_NORMAL;
@@ -778,25 +792,55 @@ int32_t mo_task_spawn(void *task_entry,
     CRITICAL_LEAVE();
 
     /* Initialize execution context outside critical section. */
-    int user_mode = (mode == TASK_MODE_U);
     hal_context_init(&tcb->context, (size_t) tcb->stack, new_stack_size,
-                     (size_t) task_entry, user_mode);
+                     (size_t) task_entry, user_mode ? 1 : 0);
 
     /* Initialize SP for preemptive mode.
      * Build initial ISR frame on stack with mepc pointing to task entry.
      */
     void *stack_top = (void *) ((uint8_t *) tcb->stack + new_stack_size);
-    tcb->sp = hal_build_initial_frame(stack_top, task_entry, user_mode);
+    tcb->sp = hal_build_initial_frame(stack_top, task_entry, user_mode ? 1 : 0);
 
-    printf("task %u: entry=%p stack=%p size=%u prio_level=%u time_slice=%u\n",
+    printf("task %u: entry=%p stack=%p size=%u mode=%c prio=%u slice=%u\n",
            tcb->id, task_entry, tcb->stack, (unsigned int) new_stack_size,
-           tcb->prio_level, tcb->time_slice);
+           task_mode_chars[tcb->mode], tcb->prio_level, tcb->time_slice);
 
     /* Add to cache and mark ready */
     cache_task(tcb->id, tcb);
     sched_enqueue_task(tcb);
 
     return tcb->id;
+}
+
+/* Creates and starts a new task in kernel (machine) mode.
+ * Used by kernel code (logger) and privileged applications.
+ *
+ * Security (defense-in-depth with multiple layers):
+ * 1. Compile-time: private/task.h guard rejects non-kernel builds
+ * 2. Runtime: in_syscall_context check rejects calls from syscall handlers
+ * 3. Hardware: read_csr(mstatus) traps immediately if called from U-mode
+ */
+int32_t mo_task_spawn_kernel(void *task_entry, uint16_t stack_size)
+{
+    /* Explicit privilege check: reading mstatus from U-mode causes trap.
+     * This provides immediate hardware-enforced security before any other code
+     * runs. The volatile prevents compiler from optimizing away the check.
+     */
+    volatile uint32_t mstatus_check __attribute__((unused)) = read_csr(mstatus);
+
+    /* Defense-in-depth: reject M-mode task creation from syscall context */
+    if (in_syscall_context)
+        return -1;
+
+    return task_spawn_internal(task_entry, stack_size, false);
+}
+
+/* Creates and starts a new task in user mode.
+ * Used by kernel bootstrap (main.c) and syscall handlers.
+ */
+int32_t mo_task_spawn_user(void *task_entry, uint16_t stack_size)
+{
+    return task_spawn_internal(task_entry, stack_size, true);
 }
 
 int32_t mo_task_cancel(uint16_t id)
