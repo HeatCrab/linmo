@@ -62,6 +62,6 @@ int32_t app_main(void)
     printf("Result: a=%d, b=%d, c=%d\n", a, b, c);
     printf("Elapsed time: %lu.%03lus\n", elapsed / 1000, elapsed % 1000);
 
-    mo_task_spawn(idle, DEFAULT_STACK_SIZE, TASK_MODE_M);
+    mo_task_spawn(idle, DEFAULT_STACK_SIZE);
     return 1;
 }

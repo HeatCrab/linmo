@@ -110,10 +110,10 @@ int32_t app_main(void)
     mo_mutex_init(&m);
     mo_cond_init(&cv);
 
-    mo_task_spawn(producer, DEFAULT_STACK_SIZE, TASK_MODE_M);
-    mo_task_spawn(consumer, DEFAULT_STACK_SIZE, TASK_MODE_M);
-    mo_task_spawn(mutex_tester, DEFAULT_STACK_SIZE, TASK_MODE_M);
-    mo_task_spawn(idle_task, DEFAULT_STACK_SIZE, TASK_MODE_M);
+    mo_task_spawn(producer, DEFAULT_STACK_SIZE);
+    mo_task_spawn(consumer, DEFAULT_STACK_SIZE);
+    mo_task_spawn(mutex_tester, DEFAULT_STACK_SIZE);
+    mo_task_spawn(idle_task, DEFAULT_STACK_SIZE);
 
     /* preemptive mode */
     return 1;

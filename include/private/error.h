@@ -1,5 +1,10 @@
 #pragma once
 
+/* Kernel-only marker: defined when compiling kernel code.
+ * Used by private headers to enforce kernel-only usage at compile time.
+ */
+#define __LINMO_KERNEL 1
+
 /* Centralizes all error codes used throughout the kernel. Error codes use
  * automatic enumeration starting from -16383 to avoid conflicts with POSIX
  * errno values. Each subsystem has its own logical grouping for easier

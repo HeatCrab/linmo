@@ -37,7 +37,7 @@
     /* 21-31 reserved for future POSIX extensions */         \
                                                              \
     /* Linmo-specific system calls (32+) */                  \
-    _(tadd, 32, int, (void *task, int stack_sz))             \
+    _(task_spawn, 32, int, (void *task, int stack_sz))       \
     _(tcancel, 33, int, (int id))                            \
     _(tyield, 34, int, (void) )                              \
     _(tdelay, 35, int, (int ticks))                          \

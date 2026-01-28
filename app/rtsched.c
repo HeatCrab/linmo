@@ -452,18 +452,17 @@ int32_t app_main(void)
     /* test_start_time will be initialized by first task that runs */
 
     /* Spawn all 5 RT/background tasks first */
-    int32_t tid0 = mo_task_spawn(task0, DEFAULT_STACK_SIZE, TASK_MODE_M);
-    int32_t tid1 = mo_task_spawn(task1, DEFAULT_STACK_SIZE, TASK_MODE_M);
-    int32_t tid2 = mo_task_spawn(task2, DEFAULT_STACK_SIZE, TASK_MODE_M);
-    (void) mo_task_spawn(task3, DEFAULT_STACK_SIZE,
-                         TASK_MODE_M); /* Non-RT task 3 */
+    int32_t tid0 = mo_task_spawn(task0, DEFAULT_STACK_SIZE);
+    int32_t tid1 = mo_task_spawn(task1, DEFAULT_STACK_SIZE);
+    int32_t tid2 = mo_task_spawn(task2, DEFAULT_STACK_SIZE);
+    (void) mo_task_spawn(task3, DEFAULT_STACK_SIZE); /* Non-RT task 3 */
     /* Non-RT task 4 - displays stats */
-    (void) mo_task_spawn(task4, DEFAULT_STACK_SIZE, TASK_MODE_M);
+    (void) mo_task_spawn(task4, DEFAULT_STACK_SIZE);
 
     /* Spawn IDLE task LAST so it's at end of round-robin list.
      * This ensures other ready tasks get scheduled before IDLE.
      */
-    (void) mo_task_spawn(idle_task, DEFAULT_STACK_SIZE, TASK_MODE_M);
+    (void) mo_task_spawn(idle_task, DEFAULT_STACK_SIZE);
 
     /* Configure EDF priorities for RT tasks 0-2 with deadlines relative to
      * current time */

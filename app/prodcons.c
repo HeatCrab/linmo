@@ -38,9 +38,9 @@ static void consumer(void)
 
 int32_t app_main(void)
 {
-    mo_task_spawn(producer, DEFAULT_STACK_SIZE, TASK_MODE_M);
-    mo_task_spawn(consumer, DEFAULT_STACK_SIZE, TASK_MODE_M);
-    mo_task_spawn(consumer, DEFAULT_STACK_SIZE, TASK_MODE_M);
+    mo_task_spawn(producer, DEFAULT_STACK_SIZE);
+    mo_task_spawn(consumer, DEFAULT_STACK_SIZE);
+    mo_task_spawn(consumer, DEFAULT_STACK_SIZE);
 
     empty = mo_sem_create(3, N);
     full = mo_sem_create(3, 0);

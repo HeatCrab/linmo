@@ -13,6 +13,7 @@
 #include <sys/task.h>
 
 #include "private/error.h"
+#include "private/task.h"
 
 /* Ring buffer entry: fixed-size for O(1) enqueue/dequeue */
 typedef struct {
@@ -82,7 +83,8 @@ int32_t mo_logger_init(void)
         return ERR_FAIL;
 
     /* 1024B stack: space for log_entry_t (130B) + ISR frame (128B) + calls */
-    logger.task_id = mo_task_spawn(logger_task, 1024, TASK_MODE_M);
+    /* Kernel internal: always use direct API for kernel-mode task */
+    logger.task_id = mo_task_spawn_kernel(logger_task, 1024);
     if (logger.task_id < 0) {
         mo_mutex_destroy(&logger.lock);
         return ERR_FAIL;

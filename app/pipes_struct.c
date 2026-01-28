@@ -44,8 +44,8 @@ void task0(void)
 
 int32_t app_main(void)
 {
-    mo_task_spawn(task0, DEFAULT_STACK_SIZE, TASK_MODE_M);
-    mo_task_spawn(task1, DEFAULT_STACK_SIZE, TASK_MODE_M);
+    mo_task_spawn(task0, DEFAULT_STACK_SIZE);
+    mo_task_spawn(task1, DEFAULT_STACK_SIZE);
 
     pipe1 = mo_pipe_create(64); /* pipe buffer, 64 bytes */
 

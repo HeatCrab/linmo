@@ -162,11 +162,11 @@ int32_t app_main(void)
     /* Spawn all the tasks. The idle task (task 0) is typically spawned first
      * to ensure it's available when other tasks yield or block.
      */
-    mo_task_spawn(idle, DEFAULT_STACK_SIZE, TASK_MODE_M);
-    mo_task_spawn(task1, DEFAULT_STACK_SIZE, TASK_MODE_M);
-    mo_task_spawn(task2, DEFAULT_STACK_SIZE, TASK_MODE_M);
-    mo_task_spawn(task3, DEFAULT_STACK_SIZE, TASK_MODE_M);
-    mo_task_spawn(task4, DEFAULT_STACK_SIZE, TASK_MODE_M);
+    mo_task_spawn(idle, DEFAULT_STACK_SIZE);
+    mo_task_spawn(task1, DEFAULT_STACK_SIZE);
+    mo_task_spawn(task2, DEFAULT_STACK_SIZE);
+    mo_task_spawn(task3, DEFAULT_STACK_SIZE);
+    mo_task_spawn(task4, DEFAULT_STACK_SIZE);
 
     /* Create the message queues with a capacity of 8 items each. */
     mq1 = mo_mq_create(8); /* Queue for signaling task1. */

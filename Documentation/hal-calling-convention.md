@@ -141,10 +141,29 @@ This "red zone" is reserved at the top of every task stack to guarantee ISR safe
 Standard RISC-V calling convention applies:
 
 ```c
-/* Example: mo_task_spawn(entry, stack_size, mode) */
-/* a0 = entry, a1 = stack_size, a2 = mode, return value in a0 */
-int32_t result = mo_task_spawn(task_function, 2048, TASK_MODE_M);
+/* Application API - the only interface apps should use: */
+int32_t result = mo_task_spawn(task_function, 2048);
 ```
+
+The `mo_task_spawn()` macro routes automatically based on build configuration:
+- `CONFIG_PRIVILEGED`: Direct kernel call → M-mode task
+- Otherwise: Syscall (`sys_task_spawn()`) → U-mode task
+
+**Internal Architecture** (kernel developers only):
+
+The implementation uses two internal functions declared in `include/private/task.h`:
+- `mo_task_spawn_kernel()`: Creates M-mode tasks (used by logger.c)
+- `mo_task_spawn_user()`: Creates U-mode tasks (used by main.c, syscall.c)
+
+These are not exposed to applications. The public header only exposes the
+`mo_task_spawn()` macro, which provides the correct behavior transparently.
+
+**Security Model**:
+- `mo_task_spawn_kernel()`: Protected by defense-in-depth:
+  - Runtime check rejects calls from syscall context (returns -1)
+  - Hardware protection: CRITICAL_ENTER traps if called from U-mode
+- `mo_task_spawn_user()`: No privilege restrictions (creates restricted tasks)
+- `mo_task_spawn()`: Safe for applications - routes to appropriate implementation
 
 ### System Call Interface
 
