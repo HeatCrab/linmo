@@ -16,7 +16,6 @@ concurrency:
 # Least-privilege permissions
 permissions:
   contents: read
-  actions: write  # Required for actions/cache@v4 to save/restore cache
 
 jobs:
   # Fast-running lint job to catch formatting issues early
@@ -33,9 +32,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Install linting tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang-format-${{ env.CLANG_FORMAT_VERSION }} shfmt
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang-format-${{ env.CLANG_FORMAT_VERSION }} shfmt
 
       - name: Check code formatting
         run: .ci/check-format.sh
@@ -43,96 +40,84 @@ jobs:
       - name: Check newline at end of files
         run: .ci/check-newline.sh
 
-  # Build and test matrix - runs in parallel after lint passes
-  # NOTE: LLVM toolchain performs build-only validation (no runtime tests)
-  #       to verify cross-toolchain compilation compatibility. GNU toolchain
-  #       runs the full test suite including application and functional tests.
+  # Build and test matrix - GNU and LLVM run in parallel after lint passes
+  # GNU: Full test suite (build + app tests + functional tests)
+  # LLVM: Build-only validation (verifies cross-toolchain compatibility)
   matrix-tests:
     runs-on: ubuntu-24.04
-    name: Test on ${{ matrix.toolchain }} toolchain
+    name: ${{ matrix.toolchain }} toolchain
     needs: lint
     timeout-minutes: 30
 
     strategy:
       fail-fast: false
       matrix:
-        toolchain: [gnu, llvm]
+        toolchain: [GNU, LLVM]
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Install QEMU
+        if: matrix.toolchain == 'GNU'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-system-riscv32
+
+      - name: Set toolchain name
+        id: toolchain
+        run: echo "name=$(echo '${{ matrix.toolchain }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
       - name: Cache toolchain
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         id: cache-toolchain
         with:
           path: riscv
-          key: ${{ runner.os }}-${{ matrix.toolchain }}-toolchain-${{ hashFiles('.ci/setup-toolchain.sh') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.toolchain }}-toolchain-
-
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential qemu-system-riscv32 wget
+          key: riscv32-${{ steps.toolchain.outputs.name }}-${{ hashFiles('.ci/setup-toolchain.sh') }}
 
       - name: Setup ${{ matrix.toolchain }} toolchain
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
-        run: .ci/setup-toolchain.sh ${{ matrix.toolchain }}
+        run: .ci/setup-toolchain.sh ${{ steps.toolchain.outputs.name }}
 
       - name: Configure toolchain environment
-        if: steps.cache-toolchain.outputs.cache-hit == 'true'
         run: |
           echo "$PWD/riscv/bin" >> "$GITHUB_PATH"
           echo "CROSS_COMPILE=riscv32-unknown-elf-" >> "$GITHUB_ENV"
-          echo "TOOLCHAIN_TYPE=${{ matrix.toolchain }}" >> "$GITHUB_ENV"
+          echo "TOOLCHAIN_TYPE=${{ steps.toolchain.outputs.name }}" >> "$GITHUB_ENV"
 
-      - name: Verify toolchain installation
+      - name: Verify toolchain
         run: |
-          if [ "${{ matrix.toolchain }}" = "gnu" ]; then
+          if [ "${{ matrix.toolchain }}" = "GNU" ]; then
             riscv32-unknown-elf-gcc --version
+            qemu-system-riscv32 --version
           else
-            # LLVM toolchain fallback: try system llvm-objdump
-            riscv32-unknown-elf-clang --version || clang --version
-            riscv32-unknown-elf-llvm-objdump --version || llvm-objdump --version
+            riscv32-unknown-elf-clang --version
           fi
-          qemu-system-riscv32 --version
 
-      - name: Build Kernel
-        run: |
-          set -euo pipefail
-          make clean
-          make -j$(nproc)
-        env:
-          TOOLCHAIN_TYPE: ${{ matrix.toolchain }}
+      - name: Build kernel
+        run: make -j$(nproc)
 
-      - name: Run All Apps
+      - name: Run app tests
         id: test
         continue-on-error: true
-        if: matrix.toolchain == 'gnu'
+        if: matrix.toolchain == 'GNU'
         run: |
-          set -euo pipefail
           output=$(.ci/run-app-tests.sh 2>&1) || true
-          echo "TEST_OUTPUT<<EOF" >> $GITHUB_OUTPUT
+          delimiter=$(openssl rand -hex 8)
+          echo "TEST_OUTPUT<<$delimiter" >> $GITHUB_OUTPUT
           echo "$output" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-        env:
-          TOOLCHAIN_TYPE: ${{ matrix.toolchain }}
+          echo "$delimiter" >> $GITHUB_OUTPUT
 
-      - name: Run Functional Tests
+      - name: Run functional tests
         id: functional_test
         continue-on-error: true
-        if: matrix.toolchain == 'gnu'
+        if: matrix.toolchain == 'GNU'
         run: |
-          set -euo pipefail
           output=$(.ci/run-functional-tests.sh 2>&1) || true
-          echo "FUNCTIONAL_TEST_OUTPUT<<EOF" >> $GITHUB_OUTPUT
+          delimiter=$(openssl rand -hex 8)
+          echo "FUNCTIONAL_TEST_OUTPUT<<$delimiter" >> $GITHUB_OUTPUT
           echo "$output" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-        env:
-          TOOLCHAIN_TYPE: ${{ matrix.toolchain }}
+          echo "$delimiter" >> $GITHUB_OUTPUT
 
-      - name: Collect Test Data
+      - name: Collect test data
         if: always()
         run: |
           set -euo pipefail
@@ -140,10 +125,10 @@ jobs:
           COMMIT_SHORT=$(git rev-parse --short HEAD 2>/dev/null || echo "${{ github.sha }}" | cut -c1-7)
           GITHUB_REPO="${{ github.repository }}"
 
-          if [ "${{ matrix.toolchain }}" = "llvm" ]; then
+          if [ "${{ matrix.toolchain }}" = "LLVM" ]; then
             # LLVM: Build-only validation, skip tests
             mkdir -p test-results
-            echo "${{ matrix.toolchain }}" > test-results/toolchain
+            echo "${{ steps.toolchain.outputs.name }}" > test-results/toolchain
             echo "$COMMIT_SHA" > test-results/commit_sha
             echo "$COMMIT_SHORT" > test-results/commit_short
             echo "$GITHUB_REPO" > test-results/github_repo
@@ -151,8 +136,7 @@ jobs:
             echo "skipped" > test-results/functional_exit_code
 
             # Generate skipped status for all apps
-            apps=$(find app/ -name "*.c" -exec basename {} .c \; | sort)
-            for app in $apps; do
+            for app in $(find app/ -name "*.c" -exec basename {} .c \; | sort); do
               echo "$app=skipped" >> test-results/apps_data
             done
 
@@ -161,33 +145,35 @@ jobs:
             echo "semaphore=skipped" >> test-results/functional_data
 
             # Generate skipped status for functional test criteria
-            echo "mutex:fairness=skipped" > test-results/functional_criteria_data
-            echo "mutex:mutual_exclusion=skipped" >> test-results/functional_criteria_data
-            echo "mutex:data_consistency=skipped" >> test-results/functional_criteria_data
-            echo "mutex:overall=skipped" >> test-results/functional_criteria_data
-            echo "semaphore:overall=skipped" >> test-results/functional_criteria_data
+            printf '%s\n' \
+              "mutex:fairness=skipped" \
+              "mutex:mutual_exclusion=skipped" \
+              "mutex:data_consistency=skipped" \
+              "mutex:overall=skipped" \
+              "semaphore:overall=skipped" \
+              > test-results/functional_criteria_data
 
-            echo "LLVM toolchain: Build validation only (tests skipped)"
+            echo "LLVM: Build validation only (tests skipped)"
           else
             # GNU: Full test suite
-            .ci/ci-tools.sh collect-data "${{ matrix.toolchain }}" "$COMMIT_SHA" "$COMMIT_SHORT" "$GITHUB_REPO" "${{ steps.test.outputs.TEST_OUTPUT }}" "${{ steps.functional_test.outputs.FUNCTIONAL_TEST_OUTPUT }}"
+            .ci/ci-tools.sh collect-data "${{ steps.toolchain.outputs.name }}" "$COMMIT_SHA" "$COMMIT_SHORT" "$GITHUB_REPO" "${{ steps.test.outputs.TEST_OUTPUT }}" "${{ steps.functional_test.outputs.FUNCTIONAL_TEST_OUTPUT }}"
           fi
 
-      - name: Upload Test Results
+      - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: test-results-${{ matrix.toolchain }}
           path: test-results/
-          retention-days: 3
+          retention-days: 7
           if-no-files-found: warn
 
-  # Comprehensive test summary with detailed reporting
+  # Aggregate results from all toolchain builds
   test-summary:
     runs-on: ubuntu-24.04
-    needs: [lint, matrix-tests]
+    needs: matrix-tests
     if: always()
-    timeout-minutes: 15
+    timeout-minutes: 10
     permissions:
       contents: read
       pull-requests: write
@@ -196,73 +182,53 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Download Test Results
-        uses: actions/download-artifact@v4
+      - name: Download test results
+        uses: actions/download-artifact@v7
         with:
           pattern: test-results-*
           path: all-test-results/
 
-      - name: Generate Test Summary
-        id: generate_summary
-        continue-on-error: true
+      - name: Generate test summary
+        id: summary
         run: |
-          echo "Aggregating test results..."
           .ci/ci-tools.sh aggregate all-test-results test-summary.toml
-
           if [ -f test-summary.toml ]; then
-            echo "summary_generated=true" >> $GITHUB_OUTPUT
-            echo "Test Summary:"
+            echo "generated=true" >> $GITHUB_OUTPUT
             cat test-summary.toml
           else
-            echo "summary_generated=false" >> $GITHUB_OUTPUT
-            echo "⚠️ Warning: test-summary.toml not generated"
+            echo "generated=false" >> $GITHUB_OUTPUT
+            echo "Warning: test-summary.toml not generated"
           fi
 
-      - name: Upload Test Summary
-        if: always() && steps.generate_summary.outputs.summary_generated == 'true'
-        uses: actions/upload-artifact@v4
+      - name: Upload test summary
+        if: steps.summary.outputs.generated == 'true'
+        uses: actions/upload-artifact@v6
         with:
           name: test-summary
           path: test-summary.toml
           retention-days: 30
-          if-no-files-found: error
 
-      - name: Comment PR with Formatted Summary
-        if: always() && github.event_name == 'pull_request' && steps.generate_summary.outputs.summary_generated == 'true'
+      - name: Post PR comment
+        if: github.event_name == 'pull_request' && steps.summary.outputs.generated == 'true'
         continue-on-error: true
-        run: |
-          echo "Posting summary to PR #${{ github.event.number }}..."
-          .ci/ci-tools.sh post-comment test-summary.toml ${{ github.event.number }}
+        run: .ci/ci-tools.sh post-comment test-summary.toml ${{ github.event.number }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Final Status Check
+      - name: Check final status
         run: |
-          set -euo pipefail
-          echo "=== Final CI Status Check ==="
-
           if [ ! -f test-summary.toml ]; then
-            echo "❌ Error: test-summary.toml not found"
-            echo "CI infrastructure issue - check test aggregation step"
+            echo "Error: test-summary.toml not found"
             exit 1
           fi
 
-          overall_status=$(grep -A 1 '^\[summary\]' test-summary.toml | grep 'status =' | cut -d'"' -f2)
-          echo "Overall test status: $overall_status"
+          status=$(grep -A1 '^\[summary\]' test-summary.toml | grep 'status =' | cut -d'"' -f2)
+          echo "Overall status: $status"
 
-          # Extract failure details if available
-          if [ "$overall_status" != "passed" ]; then
-            echo ""
-            echo "=== Failure Details ==="
-            grep -E '(failed|error|skipped)' test-summary.toml || true
-          fi
-
-          if [ "$overall_status" = "passed" ]; then
-            echo ""
-            echo "✅ All tests passed successfully"
-            exit 0
+          if [ "$status" = "passed" ]; then
+            echo "All tests passed"
           else
-            echo ""
-            echo "❌ Tests failed - see details above"
+            echo "Tests failed"
+            grep -E '(failed|error)' test-summary.toml || true
             exit 1
           fi
