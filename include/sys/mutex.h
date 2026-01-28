@@ -54,6 +54,8 @@ int32_t mo_mutex_destroy(mutex_t *m);
 /* Mutex Locking Operations */
 
 /* Acquire mutex lock, blocking if necessary.
+ * [TASK-ONLY] May block caller - NOT safe from ISR context
+ *
  * If the mutex is free, acquires it immediately. If owned by another task,
  * the calling task is placed in the wait queue and blocked until the mutex
  * becomes available. Non-recursive - returns error if caller already owns
@@ -65,6 +67,8 @@ int32_t mo_mutex_destroy(mutex_t *m);
 int32_t mo_mutex_lock(mutex_t *m);
 
 /* Attempt to acquire mutex lock without blocking.
+ * [ISR-SAFE] Non-blocking, returns immediately with success/failure
+ *
  * Returns immediately whether the lock was acquired or not.
  * @m : Pointer to mutex structure (must be valid)
  *
@@ -73,6 +77,8 @@ int32_t mo_mutex_lock(mutex_t *m);
 int32_t mo_mutex_trylock(mutex_t *m);
 
 /* Attempt to acquire mutex lock with timeout.
+ * [TASK-ONLY] May block caller - NOT safe from ISR context
+ *
  * Blocks for up to 'ticks' scheduler ticks waiting for the mutex.
  * @m     : Pointer to mutex structure (must be valid)
  * @ticks : Maximum time to wait in scheduler ticks (0 = trylock behavior)
@@ -83,6 +89,8 @@ int32_t mo_mutex_trylock(mutex_t *m);
 int32_t mo_mutex_timedlock(mutex_t *m, uint32_t ticks);
 
 /* Release mutex lock.
+ * [ISR-SAFE] Protected by NOSCHED_ENTER - safe from any context
+ *
  * If tasks are waiting, ownership is transferred to the next task in FIFO
  * order. The released task is marked ready but may not run immediately
  * depending on scheduler priority.
@@ -142,6 +150,8 @@ int32_t mo_cond_destroy(cond_t *c);
 /* Condition Variable Wait Operations */
 
 /* Wait on condition variable (atomically releases mutex).
+ * [TASK-ONLY] Blocks caller - NOT safe from ISR context
+ *
  * The calling task must own the specified mutex. The mutex is atomically
  * released and the task blocks until another task signals the condition.
  * Upon waking, the mutex is re-acquired before returning.
@@ -153,6 +163,8 @@ int32_t mo_cond_destroy(cond_t *c);
 int32_t mo_cond_wait(cond_t *c, mutex_t *m);
 
 /* Wait on condition variable with timeout.
+ * [TASK-ONLY] Blocks caller - NOT safe from ISR context
+ *
  * Like mo_cond_wait(), but limits wait time to specified number of ticks.
  * @c     : Pointer to condition variable structure (must be valid)
  * @m     : Pointer to mutex structure that caller must own
@@ -166,6 +178,8 @@ int32_t mo_cond_timedwait(cond_t *c, mutex_t *m, uint32_t ticks);
 /* Condition Variable Signal Operations */
 
 /* Signal one waiting task.
+ * [ISR-SAFE] Protected by NOSCHED_ENTER - safe for ISR-to-task signaling
+ *
  * Wakes up the oldest task waiting on the condition variable (FIFO order).
  * The signaled task will attempt to re-acquire the associated mutex.
  * @c : Pointer to condition variable structure (must be valid)
@@ -175,6 +189,8 @@ int32_t mo_cond_timedwait(cond_t *c, mutex_t *m, uint32_t ticks);
 int32_t mo_cond_signal(cond_t *c);
 
 /* Signal all waiting tasks.
+ * [ISR-SAFE] Protected by NOSCHED_ENTER - safe from any context
+ *
  * Wakes up all tasks waiting on the condition variable. All tasks will
  * attempt to re-acquire their associated mutexes, but only one will succeed
  * immediately (others will block on the mutex).

@@ -7,6 +7,17 @@
  * Provides FIFO message passing between tasks with type-safe message
  * containers. Messages consist of a user-allocated payload, a type
  * discriminator, and size information.
+ *
+ * ISR-SAFETY WARNING:
+ * [TASK-ONLY] All message queue operations are task-context only.
+ * Message queue operations use underlying queue functions that may perform
+ * memory allocation. These operations are NOT protected by CRITICAL_ENTER
+ * and are NOT safe to call from ISR context.
+ *
+ * For ISR-to-task communication, use:
+ * - mo_pipe_nbwrite() for simple byte streams
+ * - mo_sem_signal() to wake a task
+ * - mo_logger_enqueue() for logging
  */
 
 /* Message container structure */

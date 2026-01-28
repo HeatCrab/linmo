@@ -1,15 +1,14 @@
 /* Deferred logging: async I/O pattern for thread-safe printf.
  *
  * Design rationale:
- * - Ring buffer + mutex
+ * - Ring buffer protected by critical sections (ISR-safe)
  * - Logger task at IDLE priority: drains queue without blocking tasks
- * - UART output outside lock: other tasks enqueue while we output
+ * - UART output outside critical section: other tasks enqueue while we output
  * - Graceful degradation: fallback to direct output on queue full
  */
 
 #include <lib/libc.h>
 #include <sys/logger.h>
-#include <sys/mutex.h>
 #include <sys/task.h>
 
 #include "private/error.h"
@@ -21,18 +20,22 @@ typedef struct {
     char data[LOG_ENTRY_SZ];
 } log_entry_t;
 
-/* Logger state: single global instance, no dynamic allocation */
+/* Logger state: single global instance, no dynamic allocation.
+ * All queue fields protected by CRITICAL_ENTER/LEAVE (ISR-safe).
+ *
+ * FIXME(SMP): Single global logger assumes single-core. For SMP, use per-CPU
+ * log buffers or replace CRITICAL with spinlocks for cross-CPU safety.
+ */
 typedef struct {
     log_entry_t queue[LOG_QSIZE];
     uint32_t head, tail, count;
     uint32_t dropped; /* Diagnostic: tracks queue overflow events */
-    mutex_t lock;     /* Protects queue manipulation, not UART output */
     int32_t task_id;
     bool initialized;
 
     /* When true, printf bypasses queue.
      * volatile: prevent compiler caching for lock-free read. Written under
-     * mutex, read without - safe on single-core.
+     * critical section, read without - safe on single-core.
      */
     volatile bool direct_mode;
 } logger_state_t;
@@ -47,20 +50,21 @@ static void logger_task(void)
     while (1) {
         bool have_message = false;
 
-        /* Critical section: only queue manipulation, not UART I/O */
-        mo_mutex_lock(&logger.lock);
+        /* Critical section: only queue manipulation, not UART I/O.
+         * Uses CRITICAL to synchronize with ISR-context enqueuers.
+         */
+        CRITICAL_ENTER();
         if (logger.count > 0) {
             memcpy(&entry, &logger.queue[logger.tail], sizeof(log_entry_t));
             logger.tail = (logger.tail + 1) % LOG_QSIZE;
             logger.count--;
             have_message = true;
         }
-        mo_mutex_unlock(&logger.lock);
+        CRITICAL_LEAVE();
 
         if (have_message) {
-            /* Key design: UART output outside lock prevents blocking enqueuers.
-             * shorter UART write does not hold mutex - other tasks enqueue in
-             * parallel.
+            /* Key design: UART output outside critical section prevents
+             * blocking enqueuers. Other tasks/ISRs enqueue in parallel.
              */
             for (uint16_t i = 0; i < entry.length; i++)
                 _putchar(entry.data[i]);
@@ -79,16 +83,11 @@ int32_t mo_logger_init(void)
 
     memset(&logger, 0, sizeof(logger_state_t));
 
-    if (mo_mutex_init(&logger.lock) != ERR_OK)
-        return ERR_FAIL;
-
     /* 1024B stack: space for log_entry_t (130B) + ISR frame (128B) + calls */
     /* Kernel internal: always use direct API for kernel-mode task */
     logger.task_id = mo_task_spawn_kernel(logger_task, 1024);
-    if (logger.task_id < 0) {
-        mo_mutex_destroy(&logger.lock);
+    if (logger.task_id < 0)
         return ERR_FAIL;
-    }
 
     /* IDLE priority: runs only when no application tasks are ready */
     mo_task_priority(logger.task_id, TASK_PRIO_IDLE);
@@ -97,7 +96,9 @@ int32_t mo_logger_init(void)
     return ERR_OK;
 }
 
-/* Non-blocking enqueue: returns ERR_TASK_BUSY on overflow, never waits */
+/* Non-blocking enqueue: returns ERR_TASK_BUSY on overflow, never waits.
+ * [ISR-SAFE] Uses CRITICAL_ENTER for short critical section - safe from ISR.
+ */
 int32_t mo_logger_enqueue(const char *msg, uint16_t length)
 {
     if (!logger.initialized || !msg || length == 0)
@@ -107,14 +108,14 @@ int32_t mo_logger_enqueue(const char *msg, uint16_t length)
     if (length > LOG_ENTRY_SZ - 1)
         length = LOG_ENTRY_SZ - 1;
 
-    mo_mutex_lock(&logger.lock);
+    CRITICAL_ENTER();
 
     /* Drop message on full queue: non-blocking design, caller falls back to
      * direct I/O
      */
     if (logger.count >= LOG_QSIZE) {
         logger.dropped++;
-        mo_mutex_unlock(&logger.lock);
+        CRITICAL_LEAVE();
         return ERR_TASK_BUSY;
     }
 
@@ -127,40 +128,44 @@ int32_t mo_logger_enqueue(const char *msg, uint16_t length)
     logger.head = (logger.head + 1) % LOG_QSIZE;
     logger.count++;
 
-    mo_mutex_unlock(&logger.lock);
+    CRITICAL_LEAVE();
 
     return ERR_OK;
 }
 
-/* Diagnostic: monitor queue depth to detect sustained overflow conditions */
+/* Diagnostic: monitor queue depth to detect sustained overflow conditions.
+ * [ISR-SAFE] Read-only access to volatile counter with short critical section.
+ */
 uint32_t mo_logger_queue_depth(void)
 {
     if (!logger.initialized)
         return 0;
 
-    mo_mutex_lock(&logger.lock);
+    CRITICAL_ENTER();
     uint32_t depth = logger.count;
-    mo_mutex_unlock(&logger.lock);
+    CRITICAL_LEAVE();
 
     return depth;
 }
 
-/* Diagnostic: total messages lost since init (non-resettable counter) */
+/* Diagnostic: total messages lost since init (non-resettable counter).
+ * [ISR-SAFE] Read-only access to counter with short critical section.
+ */
 uint32_t mo_logger_dropped_count(void)
 {
     if (!logger.initialized)
         return 0;
 
-    mo_mutex_lock(&logger.lock);
+    CRITICAL_ENTER();
     uint32_t dropped = logger.dropped;
-    mo_mutex_unlock(&logger.lock);
+    CRITICAL_LEAVE();
 
     return dropped;
 }
 
 /* Check if logger is in direct output mode.
  * Lock-free read: safe because direct_mode is only set atomically by flush
- * and cleared by async_resume, both under mutex protection. Reading a stale
+ * and cleared by async_resume, both under critical section. Reading a stale
  * value is benign (worst case: one extra direct output or one queued message).
  */
 bool mo_logger_direct_mode(void)
@@ -183,17 +188,17 @@ void mo_logger_flush(void)
     while (1) {
         bool have_message = false;
 
-        mo_mutex_lock(&logger.lock);
+        CRITICAL_ENTER();
         if (logger.count > 0) {
             memcpy(&entry, &logger.queue[logger.tail], sizeof(log_entry_t));
             logger.tail = (logger.tail + 1) % LOG_QSIZE;
             logger.count--;
             have_message = true;
         } else {
-            /* Queue drained: enter direct mode while still holding lock */
+            /* Queue drained: enter direct mode under CRITICAL */
             logger.direct_mode = true;
         }
-        mo_mutex_unlock(&logger.lock);
+        CRITICAL_LEAVE();
 
         if (!have_message)
             break;
@@ -212,7 +217,7 @@ void mo_logger_async_resume(void)
     if (!logger.initialized)
         return;
 
-    mo_mutex_lock(&logger.lock);
+    CRITICAL_ENTER();
     logger.direct_mode = false;
-    mo_mutex_unlock(&logger.lock);
+    CRITICAL_LEAVE();
 }

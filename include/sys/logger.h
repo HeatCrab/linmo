@@ -37,8 +37,15 @@
 int32_t mo_logger_init(void);
 
 /* Enqueue a log message for deferred output.
+ * [ISR-SAFE] Protected by CRITICAL_ENTER - safe to call from ISR context
+ *
  * Non-blocking: if queue is full, message is dropped.
  * Thread-safe: protected by short critical section.
+ *
+ * This is the RECOMMENDED way to log from timer callbacks and ISRs.
+ * The message is queued and output later by the logger task, avoiding
+ * the risk of deadlock from direct UART output in ISR context.
+ *
  * @msg    : Null-terminated message string
  * @length : Length of message (excluding null terminator)
  *

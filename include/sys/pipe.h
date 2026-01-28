@@ -72,9 +72,14 @@ int32_t mo_pipe_capacity(pipe_t *pipe);
  */
 int32_t mo_pipe_free_space(pipe_t *pipe);
 
-/* Blocking I/O Operations (runs in task context only) */
+/* Blocking I/O Operations
+ * [TASK-ONLY] These functions block the caller and invoke the scheduler.
+ * They must NOT be called from ISR context (including timer callbacks).
+ */
 
 /* Read data from pipe, blocking until all requested bytes are available.
+ * [TASK-ONLY] Blocks caller - NOT safe from ISR context
+ *
  * @pipe : Pointer to pipe structure (must be valid)
  * @data : Buffer to store read data (must be non-NULL)
  * @size : Number of bytes to read (must be > 0)
@@ -85,6 +90,8 @@ int32_t mo_pipe_free_space(pipe_t *pipe);
 int32_t mo_pipe_read(pipe_t *pipe, char *data, uint16_t size);
 
 /* Write data to pipe, blocking until all data is written.
+ * [TASK-ONLY] Blocks caller - NOT safe from ISR context
+ *
  * @pipe : Pointer to pipe structure (must be valid)
  * @data : Data to write (must be non-NULL)
  * @size : Number of bytes to write (must be > 0)
@@ -94,9 +101,15 @@ int32_t mo_pipe_read(pipe_t *pipe, char *data, uint16_t size);
  */
 int32_t mo_pipe_write(pipe_t *pipe, const char *data, uint16_t size);
 
-/* Non-blocking I/O Operations (returns immediately with partial results) */
+/* Non-blocking I/O Operations
+ * [ISR-SAFE] These functions return immediately without blocking or invoking
+ * the scheduler. Safe to call from ISR context, including timer callbacks.
+ * Ideal for ISR-to-task communication patterns.
+ */
 
 /* Read available data from pipe without blocking.
+ * [ISR-SAFE] Non-blocking, returns immediately
+ *
  * @pipe : Pointer to pipe structure (must be valid)
  * @data : Buffer to store read data (must be non-NULL)
  * @size : Maximum number of bytes to read
@@ -107,6 +120,8 @@ int32_t mo_pipe_write(pipe_t *pipe, const char *data, uint16_t size);
 int32_t mo_pipe_nbread(pipe_t *pipe, char *data, uint16_t size);
 
 /* Write data to pipe without blocking.
+ * [ISR-SAFE] Non-blocking, returns immediately
+ *
  * @pipe : Pointer to pipe structure (must be valid)
  * @data : Data to write (must be non-NULL)
  * @size : Number of bytes to write

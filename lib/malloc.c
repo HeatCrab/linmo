@@ -17,6 +17,10 @@
  *
  * This implementation prioritizes fast allocation/deallocation with proper
  * fragmentation management to minimize memory waste.
+ *
+ * FIXME(SMP): Global heap state assumes single-core execution. For SMP, either
+ * use per-CPU heaps to avoid contention, or replace CRITICAL_ENTER/LEAVE with
+ * spinlocks that provide cross-CPU mutual exclusion.
  */
 
 typedef struct __memblock {
@@ -190,6 +194,7 @@ void *malloc(uint32_t size)
 
             MARK_USED(p);
             if (unlikely(free_blocks_count <= 0)) {
+                CRITICAL_LEAVE();
                 panic(ERR_HEAP_CORRUPT);
                 return NULL;
             }
@@ -278,6 +283,8 @@ void *realloc(void *ptr, uint32_t size)
         old_size - size < sizeof(memblock_t) + MALLOC_MIN_SIZE)
         return ptr;
 
+    CRITICAL_ENTER();
+
     /* fast path for shrinking */
     if (size <= old_size) {
         split_block(old_block, size);
@@ -304,12 +311,17 @@ void *realloc(void *ptr, uint32_t size)
         return (void *) (old_block + 1);
     }
 
-
+    /* Allocate new buffer while still holding critical section.
+     * This prevents race where another task/ISR frees ptr before we copy.
+     * malloc/free use nested CRITICAL_ENTER internally - safe due to nesting.
+     */
     void *new_buf = malloc(size);
     if (new_buf) {
         memcpy(new_buf, ptr, min(old_size, size));
         free(ptr);
     }
+
+    CRITICAL_LEAVE();
 
     return new_buf;
 }

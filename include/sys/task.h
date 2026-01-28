@@ -140,22 +140,41 @@ extern kcb_t *kcb;
  * 2. NOSCHED_* macros disable ONLY the scheduler timer interrupt
  */
 
+/* Critical section nesting support - defined in kernel/task.c.
+ * These enable ISR-safe critical sections by tracking nesting depth and
+ * saving/restoring the original interrupt state rather than unconditionally
+ * enabling interrupts on CRITICAL_LEAVE.
+ */
+extern volatile uint32_t critical_nesting;
+extern volatile int32_t critical_saved_mie;
+
 /* Disable/enable ALL maskable interrupts globally.
  * Provides strongest protection against concurrency from both other tasks
  * and all ISRs. Use when modifying data shared with any ISR.
+ *
+ * ISR-SAFE: These macros correctly handle nesting and restore the original
+ * interrupt state. Safe to call from ISR context (e.g., timer callbacks).
+ *
  * WARNING: Increases interrupt latency - use NOSCHED macros if protection
  * is only needed against task preemption.
  */
-#define CRITICAL_ENTER()     \
-    do {                     \
-        if (kcb->preemptive) \
-            _di();           \
+#define CRITICAL_ENTER()                   \
+    do {                                   \
+        if (kcb->preemptive) {             \
+            int32_t _mie = _di();          \
+            if (critical_nesting == 0)     \
+                critical_saved_mie = _mie; \
+            critical_nesting++;            \
+        }                                  \
     } while (0)
 
-#define CRITICAL_LEAVE()     \
-    do {                     \
-        if (kcb->preemptive) \
-            _ei();           \
+#define CRITICAL_LEAVE()                               \
+    do {                                               \
+        if (kcb->preemptive && critical_nesting > 0) { \
+            critical_nesting--;                        \
+            if (critical_nesting == 0)                 \
+                hal_interrupt_set(critical_saved_mie); \
+        }                                              \
     } while (0)
 
 /* Flag indicating scheduler has started - prevents timer IRQ during early
@@ -183,23 +202,37 @@ extern volatile bool scheduler_started;
             hal_timer_irq_enable();               \
     } while (0)
 
-/* Core Kernel and Task Management API */
+/* Core Kernel and Task Management API
+ *
+ * ISR-Safety Legend:
+ *   [ISR-SAFE]    - Safe to call from interrupt context
+ *   [TASK-ONLY]   - Must only be called from task context
+ *   [ISR-INTERNAL]- Called by ISR infrastructure, not user code
+ */
 
 /* System Control Functions */
 
-/* Prints a fatal error message and halts the system */
+/* Prints a fatal error message and halts the system.
+ * [ISR-SAFE] Safe from any context (terminates system)
+ */
 void panic(int32_t ecode);
 
-/* Main scheduler dispatch function, called by timer ISR or ecall */
+/* Main scheduler dispatch function, called by timer ISR or ecall.
+ * [ISR-INTERNAL] Not for user code - called by trap handler
+ */
 void dispatcher(int from_timer);
 
-/* Architecture-specific context switch implementations */
+/* Architecture-specific context switch implementations.
+ * [ISR-INTERNAL] Not for user code - called by scheduler
+ */
 void _dispatch(void);
 void _yield(void);
 
 /* Task Lifecycle Management */
 
 /* Application task creation macro.
+ * [TASK-ONLY] Uses malloc() - NOT safe from ISR context
+ *
  * @task_entry : Pointer to the task's entry function (void func(void))
  * @stack_size : The desired stack size in bytes (minimum is enforced)
  *
@@ -221,6 +254,8 @@ int sys_task_spawn(void *task, int stack_size);
 #endif
 
 /* Cancels and removes a task from the system. A task cannot cancel itself.
+ * [TASK-ONLY] Uses free() - NOT safe from ISR context
+ *
  * @id : The ID of the task to cancel
  *
  * Returns 0 on success, or a negative error code
@@ -229,16 +264,22 @@ int32_t mo_task_cancel(uint16_t id);
 
 /* Task Scheduling Control */
 
-/* Voluntarily yields the CPU, allowing the scheduler to run another task */
+/* Voluntarily yields the CPU, allowing the scheduler to run another task.
+ * [TASK-ONLY] Invokes scheduler - NOT safe from ISR context
+ */
 void mo_task_yield(void);
 
 /* Blocks the current task for a specified number of system ticks.
+ * [TASK-ONLY] Blocks caller - NOT safe from ISR context
+ *
  * @ticks : The number of system ticks to sleep. The task will be unblocked
  *          after this duration has passed.
  */
 void mo_task_delay(uint16_t ticks);
 
 /* Suspends a task, removing it from scheduling temporarily.
+ * [TASK-ONLY] Modifies scheduler state - NOT safe from ISR context
+ *
  * @id : The ID of the task to suspend. A task can suspend itself.
  *
  * Returns 0 on success, or a negative error code
@@ -246,6 +287,8 @@ void mo_task_delay(uint16_t ticks);
 int32_t mo_task_suspend(uint16_t id);
 
 /* Resumes a previously suspended task.
+ * [TASK-ONLY] Modifies scheduler state - NOT safe from ISR context
+ *
  * @id : The ID of the task to resume
  *
  * Returns 0 on success, or a negative error code
@@ -255,6 +298,8 @@ int32_t mo_task_resume(uint16_t id);
 /* Task Priority Management */
 
 /* Changes a task's base priority.
+ * [TASK-ONLY] Modifies scheduler state - NOT safe from ISR context
+ *
  * @id       : The ID of the task to modify
  * @priority : The new priority value (from enum task_priorities)
  *
@@ -263,6 +308,8 @@ int32_t mo_task_resume(uint16_t id);
 int32_t mo_task_priority(uint16_t id, uint16_t priority);
 
 /* Assigns a task to a custom real-time scheduler.
+ * [TASK-ONLY] Modifies scheduler state - NOT safe from ISR context
+ *
  * @id       : The ID of the task to modify
  * @priority : Opaque pointer to custom priority data for the RT scheduler
  *
@@ -273,30 +320,41 @@ int32_t mo_task_rt_priority(uint16_t id, void *priority);
 /* Task Information and Status */
 
 /* Gets the ID of the currently running task.
+ * [ISR-SAFE] Read-only access to current task pointer
  *
  * Returns the current task's ID
  */
 uint16_t mo_task_id(void);
 
 /* Gets a task's ID from its entry function pointer.
+ * [ISR-SAFE] Read-only search through task list
+ *
  * @task_entry : Pointer to the task's entry function
  *
  * Returns the task's ID, or ERR_TASK_NOT_FOUND if no task matches
  */
 int32_t mo_task_idref(void *task_entry);
 
-/* Puts the CPU into a low-power state, waiting for the next scheduler tick */
+/* Puts the CPU into a low-power state, waiting for the next scheduler tick.
+ * [TASK-ONLY] Executes WFI instruction - context dependent
+ */
 void mo_task_wfi(void);
 
-/* Gets the total number of active tasks in the system */
+/* Gets the total number of active tasks in the system.
+ * [ISR-SAFE] Read-only access to cached counter
+ */
 uint16_t mo_task_count(void);
 
 /* System Time Functions */
 
-/* Gets the current value of the system tick counter */
+/* Gets the current value of the system tick counter.
+ * [ISR-SAFE] Read-only access to volatile counter
+ */
 uint32_t mo_ticks(void);
 
-/* Gets the system uptime in milliseconds */
+/* Gets the system uptime in milliseconds.
+ * [ISR-SAFE] Calculated from tick counter
+ */
 uint64_t mo_uptime(void);
 
 /* Internal Kernel Primitives */

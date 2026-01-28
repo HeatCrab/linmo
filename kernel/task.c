@@ -32,10 +32,33 @@ kcb_t *kcb = &kernel_state;
 /* Flag to track if scheduler has started - prevents timer IRQ during early
  * init. NOSCHED_LEAVE checks this to avoid enabling timer before scheduler is
  * ready.
+ *
+ * FIXME(SMP): Global flag assumes single-core. For SMP, use per-CPU scheduler
+ * state or atomic operations with memory barriers.
  */
 volatile bool scheduler_started = false;
 
-/* timer work management for reduced latency */
+/* Critical section nesting support for ISR-safe CRITICAL_ENTER/LEAVE.
+ * Tracks nesting depth and saves the original interrupt state so that
+ * CRITICAL_LEAVE restores rather than unconditionally enables interrupts.
+ *
+ * FIXME(SMP): These variables are global, assuming single-core execution.
+ * For SMP support, move to per-CPU storage (e.g., CPU-local structure indexed
+ * by hart ID) or use atomic operations with spinlocks. Current assumptions:
+ * - Only one execution context runs at a time (task or ISR)
+ * - ISRs preempt tasks but ISRs do not nest (MIE stays cleared throughout
+ *   ISR execution per RISC-V trap entry behavior)
+ * - These globals are only used in preemptive mode; in cooperative mode
+ *   the CRITICAL macros are no-ops since tasks yield voluntarily
+ */
+volatile uint32_t critical_nesting = 0;
+volatile int32_t critical_saved_mie = 0;
+
+/* Timer work management for reduced latency.
+ *
+ * FIXME(SMP): Global timer work state assumes single-core. For SMP, use per-CPU
+ * work queues or atomic operations to avoid cross-CPU races.
+ */
 static volatile uint32_t timer_work_pending = 0;    /* timer work types */
 static volatile uint32_t timer_work_generation = 0; /* counter for coalescing */
 
