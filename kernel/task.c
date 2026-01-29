@@ -13,11 +13,6 @@
 #include "private/error.h"
 #include "private/utils.h"
 
-/* Syscall context flag from syscall.c for runtime privilege enforcement.
- * When true, M-mode task creation requests are rejected (defense-in-depth).
- */
-extern volatile bool in_syscall_context;
-
 static int32_t noop_rtsched(void);
 void _timer_tick_handler(void);
 
@@ -749,6 +744,7 @@ static int32_t task_spawn_internal(void *task_entry,
     tcb->rt_prio = NULL;
     tcb->state = TASK_STOPPED;
     tcb->mode = user_mode ? TASK_MODE_U : TASK_MODE_M;
+    tcb->in_syscall = false; /* Not in syscall context at creation */
 
     /* Set default priority with proper scheduler fields */
     tcb->prio = TASK_PRIO_NORMAL;
@@ -817,7 +813,7 @@ static int32_t task_spawn_internal(void *task_entry,
  *
  * Security (defense-in-depth with multiple layers):
  * 1. Compile-time: private/task.h guard rejects non-kernel builds
- * 2. Runtime: in_syscall_context check rejects calls from syscall handlers
+ * 2. Runtime: per-task in_syscall check rejects calls from syscall handlers
  * 3. Hardware: read_csr(mstatus) traps immediately if called from U-mode
  */
 int32_t mo_task_spawn_kernel(void *task_entry, uint16_t stack_size)
@@ -828,9 +824,15 @@ int32_t mo_task_spawn_kernel(void *task_entry, uint16_t stack_size)
      */
     volatile uint32_t mstatus_check __attribute__((unused)) = read_csr(mstatus);
 
-    /* Defense-in-depth: reject M-mode task creation from syscall context */
-    if (in_syscall_context)
-        return -1;
+    /* Defense-in-depth: reject M-mode task creation from syscall context.
+     * Uses per-task flag (tcb_t.in_syscall) which survives preemption,
+     * fixing the concurrency bug where global flag was corrupted.
+     */
+    if (kcb && kcb->task_current && kcb->task_current->data) {
+        tcb_t *self = kcb->task_current->data;
+        if (self->in_syscall)
+            return -1;
+    }
 
     return task_spawn_internal(task_entry, stack_size, false);
 }

@@ -3,14 +3,17 @@
 #pragma once
 
 #include <sys/stat.h>
+#include <types.h>
 
 /* System Call Table
  *
  * This macro defines all system calls in a table format:
  * _(name, number, return_type, argument_list)
  *
- * The table is used to generate both the enumeration of syscall numbers
- * and the function prototypes for user-space wrappers.
+ * The table generates:
+ *   - SYS_name enumeration values
+ *   - sys_name() user-space wrapper prototypes
+ *   - _name() kernel handler declarations
  */
 #define SYSCALL_TABLE                                        \
     /* POSIX-style system calls (1-31) */                    \
@@ -63,14 +66,17 @@ typedef enum {
  * This is the low-level interface for making system calls. Architecture-
  * specific implementations may override this weak symbol.
  *
+ * Arguments are passed as uintptr_t (register-sized integers) to match
+ * the RISC-V calling convention where syscall args come from a0-a2.
+ *
  * @num  : System call number (from mo_syscall_t enum)
- * @arg1 : First argument (type varies by syscall)
- * @arg2 : Second argument (type varies by syscall)
- * @arg3 : Third argument (type varies by syscall)
+ * @arg1 : First argument (register-sized, cast by handler)
+ * @arg2 : Second argument (register-sized, cast by handler)
+ * @arg3 : Third argument (register-sized, cast by handler)
  *
  * Returns syscall-specific return value
  */
-int syscall(int num, void *arg1, void *arg2, void *arg3);
+int syscall(int num, uintptr_t arg1, uintptr_t arg2, uintptr_t arg3);
 
 /* Generate function prototypes for user-space wrappers */
 #define _(name, num, rettype, arglist) rettype sys_##name arglist;

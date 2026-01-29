@@ -18,8 +18,11 @@
 
 /* Architecture-specific syscall implementation using ecall trap.
  * This overrides the weak symbol defined in kernel/syscall.c.
+ *
+ * Arguments are uintptr_t (register-sized) to match the syscall ABI.
+ * On RV32, uintptr_t == uint32_t, so casting to int for registers is safe.
  */
-int syscall(int num, void *arg1, void *arg2, void *arg3)
+int syscall(int num, uintptr_t arg1, uintptr_t arg2, uintptr_t arg3)
 {
     register int a0 asm("a0") = (int) arg1;
     register int a1 asm("a1") = (int) arg2;

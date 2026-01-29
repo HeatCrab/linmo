@@ -87,6 +87,12 @@ typedef struct tcb {
     uint8_t state;      /* Current lifecycle state (e.g., TASK_READY) */
     task_mode_t mode;   /* Privilege mode: TASK_MODE_M or TASK_MODE_U */
 
+    /* Syscall Context Tracking (per-task, survives preemption).
+     * Volatile because this flag is set/cleared around code that may be
+     * preempted by timer interrupt, and checked from different code paths.
+     */
+    volatile bool in_syscall; /* True while executing within do_syscall */
+
     /* Real-time Scheduling Support */
     void *rt_prio; /* Opaque pointer for custom real-time scheduler hook */
 
