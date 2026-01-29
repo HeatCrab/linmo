@@ -7,14 +7,7 @@
 #include "private/task.h"
 #include "private/utils.h"
 
-/* Syscall context flag for privilege enforcement.
- * When set, kernel APIs that check privilege will reject M-mode requests.
- * This prevents privilege escalation if U-mode code somehow calls kernel
- * functions directly (defense-in-depth alongside hardware protection).
- */
-volatile bool in_syscall_context = false;
-
-/* syscall wrappers */
+/* syscall wrappers - forward declarations */
 #define _(name, num, rettype, arglist) static rettype _##name arglist;
 SYSCALL_TABLE
 #undef _
@@ -28,10 +21,11 @@ static const void *syscall_table[SYS_COUNT] = {SYSCALL_TABLE};
  * Called by trap handlers to invoke syscall implementations without
  * triggering privilege transitions. User space must not call this directly.
  *
- * Sets in_syscall_context flag during execution to enable runtime privilege
- * checks in kernel APIs (defense-in-depth for mo_task_spawn_kernel).
+ * Per-task syscall context tracking:
+ * - Sets tcb_t.in_syscall flag for current task (survives preemption)
+ * - Enables runtime privilege checks in kernel APIs (defense-in-depth)
  */
-int do_syscall(int num, void *a1, void *a2, void *a3)
+int do_syscall(int num, uintptr_t a1, uintptr_t a2, uintptr_t a3)
 {
     if (unlikely(num <= 0 || num >= SYS_COUNT))
         return -ENOSYS;
@@ -39,12 +33,18 @@ int do_syscall(int num, void *a1, void *a2, void *a3)
     if (unlikely(!syscall_table[num]))
         return -ENOSYS;
 
-    /* Mark syscall context for privilege enforcement */
-    in_syscall_context = true;
-    int result =
-        ((int (*)(void *, void *, void *)) syscall_table[num])(a1, a2, a3);
-    in_syscall_context = false;
+    /* Per-task syscall context tracking (survives preemption) */
+    tcb_t *self = (kcb && kcb->task_current) ? kcb->task_current->data : NULL;
 
+    if (self)
+        self->in_syscall = true;
+
+    int result =
+        ((int (*)(uintptr_t, uintptr_t, uintptr_t)) syscall_table[num])(a1, a2,
+                                                                        a3);
+
+    if (self)
+        self->in_syscall = false;
     return result;
 }
 
@@ -52,7 +52,10 @@ int do_syscall(int num, void *a1, void *a2, void *a3)
  * This weak symbol allows architecture-specific implementations to override
  * with trap-based entry mechanisms.
  */
-__attribute__((weak)) int syscall(int num, void *a1, void *a2, void *a3)
+__attribute__((weak)) int syscall(int num,
+                                  uintptr_t a1,
+                                  uintptr_t a2,
+                                  uintptr_t a3)
 {
     return do_syscall(num, a1, a2, a3);
 }
@@ -270,7 +273,7 @@ static int _task_spawn(void *task, int stack_size)
 
 int sys_task_spawn(void *task, int stack_size)
 {
-    return syscall(SYS_task_spawn, task, (void *) stack_size, 0);
+    return syscall(SYS_task_spawn, (uintptr_t) task, (uintptr_t) stack_size, 0);
 }
 
 static int _tcancel(int id)
@@ -283,7 +286,7 @@ static int _tcancel(int id)
 
 int sys_tcancel(int id)
 {
-    return syscall(SYS_tcancel, (void *) id, 0, 0);
+    return syscall(SYS_tcancel, (uintptr_t) id, 0, 0);
 }
 
 static int _tyield(void)
@@ -308,7 +311,7 @@ static int _tdelay(int ticks)
 
 int sys_tdelay(int ticks)
 {
-    return syscall(SYS_tdelay, (void *) ticks, 0, 0);
+    return syscall(SYS_tdelay, (uintptr_t) ticks, 0, 0);
 }
 
 static int _tsuspend(int id)
@@ -321,7 +324,7 @@ static int _tsuspend(int id)
 
 int sys_tsuspend(int id)
 {
-    return syscall(SYS_tsuspend, (void *) id, 0, 0);
+    return syscall(SYS_tsuspend, (uintptr_t) id, 0, 0);
 }
 
 static int _tresume(int id)
@@ -334,7 +337,7 @@ static int _tresume(int id)
 
 int sys_tresume(int id)
 {
-    return syscall(SYS_tresume, (void *) id, 0, 0);
+    return syscall(SYS_tresume, (uintptr_t) id, 0, 0);
 }
 
 static int _tpriority(int id, int priority)
@@ -347,7 +350,7 @@ static int _tpriority(int id, int priority)
 
 int sys_tpriority(int id, int priority)
 {
-    return syscall(SYS_tpriority, (void *) id, (void *) priority, 0);
+    return syscall(SYS_tpriority, (uintptr_t) id, (uintptr_t) priority, 0);
 }
 
 static int _tid(void)
@@ -416,5 +419,5 @@ static int _tputs(const char *str)
 
 int sys_tputs(const char *str)
 {
-    return syscall(SYS_tputs, (void *) str, 0, 0);
+    return syscall(SYS_tputs, (uintptr_t) str, 0, 0);
 }

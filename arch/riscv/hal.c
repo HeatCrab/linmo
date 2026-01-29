@@ -387,15 +387,17 @@ uint32_t do_trap(uint32_t cause, uint32_t epc, uint32_t isr_sp)
             uint32_t *f = (uint32_t *) isr_sp;
 
             int syscall_num = f[FRAME_A7];
-            void *arg1 = (void *) f[FRAME_A0];
-            void *arg2 = (void *) f[FRAME_A1];
-            void *arg3 = (void *) f[FRAME_A2];
+            uintptr_t arg1 = (uintptr_t) f[FRAME_A0];
+            uintptr_t arg2 = (uintptr_t) f[FRAME_A1];
+            uintptr_t arg3 = (uintptr_t) f[FRAME_A2];
 
             /* Dispatch to syscall implementation via direct table lookup.
              * Must use do_syscall here instead of syscall() to avoid recursive
              * traps, as the user-space syscall() may be overridden with ecall.
+             * Arguments are uintptr_t (register-sized) matching RISC-V ABI.
              */
-            extern int do_syscall(int num, void *arg1, void *arg2, void *arg3);
+            extern int do_syscall(int num, uintptr_t a1, uintptr_t a2,
+                                  uintptr_t a3);
             int retval = do_syscall(syscall_num, arg1, arg2, arg3);
 
             /* Store return value and updated PC */
