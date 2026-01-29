@@ -2,11 +2,18 @@
  *
  * It creates several timers with different periods and modes to verify
  * their correct operation.
+ *
+ * Note: Timer callbacks execute in ISR context. This test uses printf()
+ * which may fall back to blocking direct output when the queue is full
+ * or the message exceeds LOG_ENTRY_SZ. For production ISR callbacks,
+ * prefer mo_logger_enqueue() or isr_puts() which are always ISR-safe.
  */
 #include <linmo.h>
 
-/* Helper function to print the current system uptime. */
-void print_time()
+/* Helper function to print the current system uptime.
+ * Called from timer callback (ISR context) - uses ISR-safe logging.
+ */
+static void print_time(void)
 {
     /* mo_uptime() returns a 64-bit value to prevent rollover. */
     uint64_t time_ms = mo_uptime();
@@ -17,8 +24,10 @@ void print_time()
 }
 
 /* Generic timer callback.
- * We can use a single callback for multiple timers by passing a unique
- * identifier as the argument.
+ * Executes in ISR context - only ISR-safe functions are permitted here.
+ * This example uses printf() for convenience in a test app; it may block
+ * on direct output fallback. For guaranteed ISR-safe logging, use
+ * mo_logger_enqueue(), isr_puts(), or isr_putx().
  */
 void *timer_callback(void *arg)
 {

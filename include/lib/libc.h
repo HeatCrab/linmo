@@ -143,6 +143,48 @@ int random_r(struct random_data *buf, int32_t *result);
 int32_t puts(const char *str);
 int _putchar(int c); /* Low-level character output (used by logger) */
 
+/* ISR-Safe I/O Functions
+ * [ISR-SAFE] These functions are safe to call from interrupt context.
+ * They perform direct UART output without locks, buffering, or malloc.
+ * Use for emergency debug output in timer callbacks and trap handlers.
+ *
+ * Warning: Direct UART output is slow and blocks until complete.
+ * For normal logging, prefer mo_logger_enqueue() which is non-blocking.
+ */
+
+/* Maximum characters isr_puts() will emit per call.
+ * Prevents unbounded blocking in ISR context on long strings.
+ */
+#define ISR_OUTPUT_MAX 128
+
+/* ISR-safe string output - direct UART, no buffering.
+ * [ISR-SAFE] Safe to call from any context including ISR and timer callbacks.
+ * Output is capped at ISR_OUTPUT_MAX characters to bound ISR latency.
+ *
+ * @s : Null-terminated string to output
+ */
+static inline void isr_puts(const char *s)
+{
+    for (uint32_t i = 0; s && *s && i < ISR_OUTPUT_MAX; i++)
+        _putchar(*s++);
+}
+
+/* ISR-safe hexadecimal output - direct UART, no buffering.
+ * [ISR-SAFE] Safe to call from any context including ISR and timer callbacks.
+ *
+ * Outputs a 32-bit value as 8 hex digits (e.g., "DEADBEEF").
+ * Useful for printing addresses and error codes in trap handlers.
+ *
+ * @val : 32-bit value to output as hexadecimal
+ */
+static inline void isr_putx(uint32_t val)
+{
+    for (int i = 28; i >= 0; i -= 4) {
+        uint32_t nibble = (val >> i) & 0xF;
+        _putchar(nibble < 10 ? '0' + nibble : 'A' + nibble - 10);
+    }
+}
+
 /* Character and string input */
 int getchar(void);
 char *gets(char *s);
