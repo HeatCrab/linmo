@@ -35,7 +35,7 @@
 #define CONTEXT_MSTATUS 16 /* Machine Status CSR */
 
 /* Defines the size of the full trap frame saved by the ISR in 'boot.c'.
- * The _isr routine saves 33 words (30 GPRs + mcause + mepc + mstatus),
+ * The _isr routine saves 34 words (30 GPRs + mcause + mepc + mstatus + SP),
  * resulting in a 144-byte frame with alignment padding. This space MUST be
  * reserved at the top of every task's stack (as a "red zone") to guarantee
  * that an interrupt, even at peak stack usage, will not corrupt memory
@@ -48,39 +48,40 @@
  * Indices are in word offsets (divide byte offset by 4).
  */
 enum {
-    FRAME_RA = 0,      /* x1  - Return Address */
-    FRAME_GP = 1,      /* x3  - Global Pointer */
-    FRAME_TP = 2,      /* x4  - Thread Pointer */
-    FRAME_T0 = 3,      /* x5  - Temporary register 0 */
-    FRAME_T1 = 4,      /* x6  - Temporary register 1 */
-    FRAME_T2 = 5,      /* x7  - Temporary register 2 */
-    FRAME_S0 = 6,      /* x8  - Saved register 0 / Frame Pointer */
-    FRAME_S1 = 7,      /* x9  - Saved register 1 */
-    FRAME_A0 = 8,      /* x10 - Argument/Return 0 */
-    FRAME_A1 = 9,      /* x11 - Argument/Return 1 */
-    FRAME_A2 = 10,     /* x12 - Argument 2 */
-    FRAME_A3 = 11,     /* x13 - Argument 3 */
-    FRAME_A4 = 12,     /* x14 - Argument 4 */
-    FRAME_A5 = 13,     /* x15 - Argument 5 */
-    FRAME_A6 = 14,     /* x16 - Argument 6 */
-    FRAME_A7 = 15,     /* x17 - Argument 7 / Syscall Number */
-    FRAME_S2 = 16,     /* x18 - Saved register 2 */
-    FRAME_S3 = 17,     /* x19 - Saved register 3 */
-    FRAME_S4 = 18,     /* x20 - Saved register 4 */
-    FRAME_S5 = 19,     /* x21 - Saved register 5 */
-    FRAME_S6 = 20,     /* x22 - Saved register 6 */
-    FRAME_S7 = 21,     /* x23 - Saved register 7 */
-    FRAME_S8 = 22,     /* x24 - Saved register 8 */
-    FRAME_S9 = 23,     /* x25 - Saved register 9 */
-    FRAME_S10 = 24,    /* x26 - Saved register 10 */
-    FRAME_S11 = 25,    /* x27 - Saved register 11 */
-    FRAME_T3 = 26,     /* x28 - Temporary register 3 */
-    FRAME_T4 = 27,     /* x29 - Temporary register 4 */
-    FRAME_T5 = 28,     /* x30 - Temporary register 5 */
-    FRAME_T6 = 29,     /* x31 - Temporary register 6 */
-    FRAME_MCAUSE = 30, /* Machine Cause CSR */
-    FRAME_EPC = 31,    /* Machine Exception PC (mepc) */
-    FRAME_MSTATUS = 32 /* Machine Status CSR */
+    FRAME_RA = 0,       /* x1  - Return Address */
+    FRAME_GP = 1,       /* x3  - Global Pointer */
+    FRAME_TP = 2,       /* x4  - Thread Pointer */
+    FRAME_T0 = 3,       /* x5  - Temporary register 0 */
+    FRAME_T1 = 4,       /* x6  - Temporary register 1 */
+    FRAME_T2 = 5,       /* x7  - Temporary register 2 */
+    FRAME_S0 = 6,       /* x8  - Saved register 0 / Frame Pointer */
+    FRAME_S1 = 7,       /* x9  - Saved register 1 */
+    FRAME_A0 = 8,       /* x10 - Argument/Return 0 */
+    FRAME_A1 = 9,       /* x11 - Argument/Return 1 */
+    FRAME_A2 = 10,      /* x12 - Argument 2 */
+    FRAME_A3 = 11,      /* x13 - Argument 3 */
+    FRAME_A4 = 12,      /* x14 - Argument 4 */
+    FRAME_A5 = 13,      /* x15 - Argument 5 */
+    FRAME_A6 = 14,      /* x16 - Argument 6 */
+    FRAME_A7 = 15,      /* x17 - Argument 7 / Syscall Number */
+    FRAME_S2 = 16,      /* x18 - Saved register 2 */
+    FRAME_S3 = 17,      /* x19 - Saved register 3 */
+    FRAME_S4 = 18,      /* x20 - Saved register 4 */
+    FRAME_S5 = 19,      /* x21 - Saved register 5 */
+    FRAME_S6 = 20,      /* x22 - Saved register 6 */
+    FRAME_S7 = 21,      /* x23 - Saved register 7 */
+    FRAME_S8 = 22,      /* x24 - Saved register 8 */
+    FRAME_S9 = 23,      /* x25 - Saved register 9 */
+    FRAME_S10 = 24,     /* x26 - Saved register 10 */
+    FRAME_S11 = 25,     /* x27 - Saved register 11 */
+    FRAME_T3 = 26,      /* x28 - Temporary register 3 */
+    FRAME_T4 = 27,      /* x29 - Temporary register 4 */
+    FRAME_T5 = 28,      /* x30 - Temporary register 5 */
+    FRAME_T6 = 29,      /* x31 - Temporary register 6 */
+    FRAME_MCAUSE = 30,  /* Machine Cause CSR */
+    FRAME_EPC = 31,     /* Machine Exception PC (mepc) */
+    FRAME_MSTATUS = 32, /* Machine Status CSR */
+    FRAME_SP = 33       /* Stack Pointer (saved for restore) */
 };
 
 /* Global variable to hold the new stack pointer for pending context switch.
@@ -95,6 +96,15 @@ static void *pending_switch_sp = NULL;
  * SP to the previous task (the ISR frame SP, not the current function's SP).
  */
 static uint32_t current_isr_frame_sp = 0;
+
+
+/* Current task's kernel stack top address for U-mode trap entry.
+ * For U-mode tasks: points to (kernel_stack + kernel_stack_size).
+ * For M-mode tasks: NULL (uses global _stack).
+ * Updated by dispatcher during context switches.
+ * The ISR restore path loads this into mscratch before mret.
+ */
+void *current_kernel_stack_top = NULL;
 
 /* NS16550A UART0 - Memory-mapped registers for the QEMU 'virt' machine's serial
  * port.
@@ -497,33 +507,38 @@ extern uint32_t _gp, _end;
  */
 void *hal_build_initial_frame(void *stack_top,
                               void (*task_entry)(void),
-                              int user_mode)
+                              int user_mode,
+                              void *kernel_stack,
+                              size_t kernel_stack_size)
 {
 #define INITIAL_STACK_RESERVE \
     256 /* Reserve space below stack_top for task startup */
 
-    /* Place frame deeper in stack so after ISR deallocates (sp += 128),
-     * SP will be at (stack_top - INITIAL_STACK_RESERVE), not at stack_top.
+    /* For U-mode tasks, build frame on kernel stack instead of user stack.
+     * For M-mode tasks, build frame on user stack as before.
      */
-    uint32_t *frame =
-        (uint32_t *) ((uint8_t *) stack_top - INITIAL_STACK_RESERVE -
-                      ISR_STACK_FRAME_SIZE);
+    uint32_t *frame;
+    if (user_mode && kernel_stack) {
+        /* U-mode: Place frame on kernel stack */
+        void *kstack_top = (uint8_t *) kernel_stack + kernel_stack_size;
+        frame = (uint32_t *) ((uint8_t *) kstack_top - ISR_STACK_FRAME_SIZE);
+    } else {
+        /* M-mode: Place frame on user stack with reserve space */
+        frame = (uint32_t *) ((uint8_t *) stack_top - INITIAL_STACK_RESERVE -
+                              ISR_STACK_FRAME_SIZE);
+    }
 
     /* Zero out entire frame */
-    for (int i = 0; i < 32; i++) {
+    for (int i = 0; i < 36; i++) {
         frame[i] = 0;
     }
 
     /* Compute tp value same as boot.c: aligned to 64 bytes from _end */
     uint32_t tp_val = ((uint32_t) &_end + 63) & ~63U;
 
-    /* Initialize critical registers for proper task startup:
-     * - frame[1] = gp: Global pointer, required for accessing global variables
-     * - frame[2] = tp: Thread pointer, required for thread-local storage
-     * - frame[32] = mepc: Task entry point, where mret will jump to
-     */
-    frame[1] = (uint32_t) &_gp; /* gp - global pointer */
-    frame[2] = tp_val;          /* tp - thread pointer */
+    /* Initialize critical registers for proper task startup */
+    frame[FRAME_GP] = (uint32_t) &_gp; /* gp - global pointer */
+    frame[FRAME_TP] = tp_val;          /* tp - thread pointer */
 
     /* Initialize mstatus for new task:
      * - MPIE=1: mret will copy this to MIE, enabling interrupts after task
@@ -536,6 +551,19 @@ void *hal_build_initial_frame(void *stack_top,
     frame[FRAME_MSTATUS] = mstatus_val;
 
     frame[FRAME_EPC] = (uint32_t) task_entry; /* mepc - entry point */
+
+    /* SP value for when ISR returns (frame[33] will hold this value).
+     * For U-mode: Set to user stack top (will be saved to frame[33] in ISR).
+     * For M-mode: Set to frame + ISR_STACK_FRAME_SIZE as before.
+     */
+    if (user_mode && kernel_stack) {
+        /* U-mode: frame[33] should contain user SP */
+        frame[FRAME_SP] =
+            (uint32_t) ((uint8_t *) stack_top - INITIAL_STACK_RESERVE);
+    } else {
+        /* M-mode: frame[33] contains kernel SP after frame deallocation */
+        frame[FRAME_SP] = (uint32_t) ((uint8_t *) frame + ISR_STACK_FRAME_SIZE);
+    }
 
     return (void *) frame;
 }
@@ -746,6 +774,21 @@ void hal_switch_stack(void **old_sp, void *new_sp)
     pending_switch_sp = new_sp;
 }
 
+/* Updates the kernel stack top for the current task.
+ * Called by dispatcher during context switch to set up mscratch for next trap.
+ */
+void hal_set_kernel_stack(void *kernel_stack, size_t kernel_stack_size)
+{
+    if (kernel_stack && kernel_stack_size > 0) {
+        /* U-mode task: point to top of per-task kernel stack */
+        current_kernel_stack_top =
+            (void *) ((uint8_t *) kernel_stack + kernel_stack_size);
+    } else {
+        /* M-mode task: NULL signals to use global _stack */
+        current_kernel_stack_top = NULL;
+    }
+}
+
 /* Enable interrupts on first run of a task.
  * Checks if task's return address still points to entry (meaning it hasn't
  * run yet), and if so, enables global interrupts.
@@ -813,7 +856,29 @@ static void __attribute__((naked, used)) __dispatch_init_isr(void)
         "lw     t0, 32*4(sp)\n"
         "csrw   mstatus, t0\n"
 
-        /* Restore mepc from frame[31] */
+        /* Initialize mscratch based on MPP field in mstatus.
+         * For M-mode set mscratch to zero, for U-mode set to kernel stack.
+         * ISR uses this to detect privilege mode via blind swap.
+         */
+        "srli   t2, t0, 11\n"
+        "andi   t2, t2, 0x3\n"
+        "bnez   t2, .Ldispatch_mmode\n"
+
+        /* U-mode path */
+        "la     t2, current_kernel_stack_top\n"
+        "lw     t2, 0(t2)\n"
+        "bnez   t2, .Ldispatch_umode_ok\n"
+        "la     t2, _stack\n"
+        ".Ldispatch_umode_ok:\n"
+        "csrw   mscratch, t2\n"
+        "j      .Ldispatch_done\n"
+
+        /* M-mode path */
+        ".Ldispatch_mmode:\n"
+        "csrw   mscratch, zero\n"
+        ".Ldispatch_done:\n"
+
+        /* Restore mepc */
         "lw     t1, 31*4(sp)\n"
         "csrw   mepc, t1\n"
 
@@ -849,13 +914,16 @@ static void __attribute__((naked, used)) __dispatch_init_isr(void)
         "lw  t5,  28*4(sp)\n"
         "lw  t6,  29*4(sp)\n"
 
-        /* Deallocate stack frame */
-        "addi   sp, sp, %0\n"
+        /* Restore SP from frame[33].
+         * For U-mode: frame[33] contains user stack pointer.
+         * For M-mode: frame[33] contains kernel SP after frame deallocation.
+         */
+        "lw     sp, 33*4(sp)\n"
 
         /* Return from trap - jump to task entry point */
         "mret\n"
         :
-        : "i"(ISR_STACK_FRAME_SIZE)
+        :
         : "memory");
 }
 

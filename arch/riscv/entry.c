@@ -15,6 +15,7 @@
  */
 
 #include <sys/syscall.h>
+#include <types.h>
 
 /* Architecture-specific syscall implementation using ecall trap.
  * This overrides the weak symbol defined in kernel/syscall.c.
@@ -42,4 +43,27 @@ int syscall(int num, uintptr_t arg1, uintptr_t arg2, uintptr_t arg3)
                  : "memory", "cc");
 
     return a0;
+}
+
+/* Stack Pointer Swap for Testing
+ *
+ * This naked function provides atomic SP swapping for kernel validation tests.
+ * Using __attribute__((naked)) ensures the compiler does not generate any
+ * prologue/epilogue code that would use the stack, and prevents instruction
+ * reordering that could break the swap semantics.
+ *
+ * Inspired by Linux kernel's __switch_to for context switching.
+ */
+
+/* Atomically swap the stack pointer with a new value.
+ * @new_sp: New stack pointer value to install (in a0)
+ * @return: Previous stack pointer value (in a0)
+ */
+__attribute__((naked)) uint32_t __switch_sp(uint32_t new_sp)
+{
+    asm volatile(
+        "mv   t0, sp    \n" /* Save current SP to temporary */
+        "mv   sp, a0    \n" /* Install new SP from argument */
+        "mv   a0, t0    \n" /* Return old SP in a0 */
+        "ret            \n");
 }

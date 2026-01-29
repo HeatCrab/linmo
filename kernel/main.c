@@ -96,6 +96,11 @@ int32_t main(void)
      */
     scheduler_started = true;
 
+    /* Initialize kernel stack for first task */
+    if (kcb->preemptive)
+        hal_set_kernel_stack(first_task->kernel_stack,
+                             first_task->kernel_stack_size);
+
     /* In preemptive mode, tasks are managed via ISR frames (sp).
      * In cooperative mode, tasks are managed via jmp_buf (context).
      */

@@ -78,6 +78,10 @@ typedef struct tcb {
     size_t stack_sz; /* Total size of the stack in bytes */
     void (*entry)(void); /* Task's entry point function */
 
+    /* Kernel Stack for U-mode Tasks */
+    void *kernel_stack; /* Base address of kernel stack (NULL for M-mode) */
+    size_t kernel_stack_size; /* Size of kernel stack in bytes (0 for M-mode) */
+
     /* Scheduling Parameters */
     uint16_t prio;      /* Encoded priority (base and time slice counter) */
     uint8_t prio_level; /* Priority level (0-7, 0 = highest) */

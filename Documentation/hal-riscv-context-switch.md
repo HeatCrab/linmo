@@ -123,14 +123,26 @@ a complete interrupt service routine frame:
 ```c
 void *hal_build_initial_frame(void *stack_top,
                               void (*task_entry)(void),
-                              int user_mode)
+                              int user_mode,
+                              void *kernel_stack,
+                              size_t kernel_stack_size)
 {
-    /* Place frame in stack with initial reserve below for proper startup */
-    uint32_t *frame = (uint32_t *) ((uint8_t *) stack_top - 256 -
-                                    ISR_STACK_FRAME_SIZE);
+    /* For U-mode tasks, build frame on kernel stack for stack isolation.
+     * For M-mode tasks, build frame on user stack as before.
+     */
+    uint32_t *frame;
+    if (user_mode && kernel_stack) {
+        /* U-mode: Place frame on per-task kernel stack */
+        void *kstack_top = (uint8_t *) kernel_stack + kernel_stack_size;
+        frame = (uint32_t *) ((uint8_t *) kstack_top - ISR_STACK_FRAME_SIZE);
+    } else {
+        /* M-mode: Place frame on user stack with reserve below */
+        frame = (uint32_t *) ((uint8_t *) stack_top - 256 -
+                              ISR_STACK_FRAME_SIZE);
+    }
 
     /* Initialize all general purpose registers to zero */
-    for (int i = 0; i < 32; i++)
+    for (int i = 0; i < 36; i++)
         frame[i] = 0;
 
     /* Compute thread pointer: aligned to 64 bytes from _end */
@@ -151,6 +163,18 @@ void *hal_build_initial_frame(void *stack_top,
 
     /* Set entry point */
     frame[FRAME_EPC] = (uint32_t) task_entry;
+
+    /* SP value for when ISR returns (stored in frame[33]).
+     * For U-mode: Set to user stack top.
+     * For M-mode: Set to frame + ISR_STACK_FRAME_SIZE.
+     */
+    if (user_mode && kernel_stack) {
+        /* U-mode: frame[33] should contain user SP */
+        frame[FRAME_SP] = (uint32_t) ((uint8_t *) stack_top - 256);
+    } else {
+        /* M-mode: frame[33] contains kernel SP after frame deallocation */
+        frame[FRAME_SP] = (uint32_t) ((uint8_t *) frame + ISR_STACK_FRAME_SIZE);
+    }
 
     return frame;  /* Return frame base as initial stack pointer */
 }
