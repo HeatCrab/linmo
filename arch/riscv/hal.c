@@ -3,6 +3,7 @@
 #include <sys/task.h>
 
 #include "csr.h"
+#include "pmp.h"
 #include "private/stdio.h"
 #include "private/utils.h"
 
@@ -97,6 +98,15 @@ static void *pending_switch_sp = NULL;
  */
 static uint32_t current_isr_frame_sp = 0;
 
+
+/* Trap nesting depth counter to prevent inner traps from overwriting
+ * current_isr_frame_sp. Only the outermost trap should set the ISR frame
+ * pointer that context switching requires.
+ *
+ * Exported to allow trap context detection and avoid unnecessary nested
+ * trap triggering.
+ */
+volatile uint32_t trap_nesting_depth = 0;
 
 /* Current task's kernel stack top address for U-mode trap entry.
  * For U-mode tasks: points to (kernel_stack + kernel_stack_size).
@@ -283,27 +293,18 @@ static void uart_init(uint32_t baud)
 void hal_hardware_init(void)
 {
     uart_init(USART_BAUD);
+
+    /* Initialize PMP hardware with kernel memory regions */
+    pmp_config_t *pmp_config = pmp_get_config();
+    if (pmp_init_kernel(pmp_config) != 0)
+        hal_panic();
+
     /* Set the first timer interrupt. Subsequent interrupts are set in ISR */
     mtimecmp_w(mtime_r() + (F_CPU / F_TIMER));
     /* Install low-level I/O handlers for the C standard library */
     _stdout_install(__putchar);
     _stdin_install(__getchar);
     _stdpoll_install(__kbhit);
-
-    /* Grant U-mode access to all memory for validation purposes.
-     * By default, RISC-V PMP denies all access to U-mode, which would cause
-     * instruction access faults immediately upon task switch. This minimal
-     * setup allows U-mode tasks to execute and serves as a placeholder until
-     * the full PMP driver is integrated.
-     */
-    uint32_t pmpaddr = -1UL; /* Cover entire address space */
-    uint8_t pmpcfg = 0x0F;   /* TOR, R, W, X enabled */
-
-    asm volatile(
-        "csrw pmpaddr0, %0\n"
-        "csrw pmpcfg0, %1\n"
-        :
-        : "r"(pmpaddr), "r"(pmpcfg));
 }
 
 /* Halts the system in an unrecoverable state */
@@ -364,11 +365,18 @@ static const char *exc_msg[] = {
  */
 uint32_t do_trap(uint32_t cause, uint32_t epc, uint32_t isr_sp)
 {
+    uint32_t ret_sp; /* Return value - SP to use for context restore */
+
     /* Reset pending switch at start of every trap */
     pending_switch_sp = NULL;
 
-    /* Store ISR frame SP so hal_switch_stack() can save it to prev task */
-    current_isr_frame_sp = isr_sp;
+    /* Only the outermost trap sets the ISR frame pointer for context
+     * switching. Inner traps must not overwrite this value.
+     */
+    if (trap_nesting_depth == 0) {
+        current_isr_frame_sp = isr_sp;
+    }
+    trap_nesting_depth++;
 
     if (MCAUSE_IS_INTERRUPT(cause)) { /* Asynchronous Interrupt */
         uint32_t int_code = MCAUSE_GET_CODE(cause);
@@ -380,6 +388,15 @@ uint32_t do_trap(uint32_t cause, uint32_t epc, uint32_t isr_sp)
             mtimecmp_w(mtimecmp_r() + (F_CPU / F_TIMER));
             /* Invoke scheduler - parameter 1 = from timer, increment ticks */
             dispatcher(1);
+
+            /* Nested traps must return their own SP to unwind properly.
+             * Only the outermost trap performs context switch restoration.
+             */
+            if (trap_nesting_depth > 1) {
+                pending_switch_sp = NULL;
+                ret_sp = isr_sp;
+                goto trap_exit;
+            }
         } else {
             /* All other interrupt sources are unexpected and fatal */
             hal_panic();
@@ -389,17 +406,22 @@ uint32_t do_trap(uint32_t cause, uint32_t epc, uint32_t isr_sp)
 
         /* Handle ecall from U-mode - system calls */
         if (code == MCAUSE_ECALL_UMODE) {
+            /* Extract syscall arguments from ISR frame */
+            uint32_t *f = (uint32_t *) isr_sp;
+
             /* Advance mepc past the ecall instruction (4 bytes) */
             uint32_t new_epc = epc + 4;
             write_csr(mepc, new_epc);
-
-            /* Extract syscall arguments from ISR frame */
-            uint32_t *f = (uint32_t *) isr_sp;
 
             int syscall_num = f[FRAME_A7];
             uintptr_t arg1 = (uintptr_t) f[FRAME_A0];
             uintptr_t arg2 = (uintptr_t) f[FRAME_A1];
             uintptr_t arg3 = (uintptr_t) f[FRAME_A2];
+
+            /* Update frame EPC before syscall dispatch to ensure correct return
+             * address if nested traps occur during syscall execution.
+             */
+            f[FRAME_EPC] = new_epc;
 
             /* Dispatch to syscall implementation via direct table lookup.
              * Must use do_syscall here instead of syscall() to avoid recursive
@@ -410,11 +432,17 @@ uint32_t do_trap(uint32_t cause, uint32_t epc, uint32_t isr_sp)
                                   uintptr_t a3);
             int retval = do_syscall(syscall_num, arg1, arg2, arg3);
 
-            /* Store return value and updated PC */
+            /* Store return value */
             f[FRAME_A0] = (uint32_t) retval;
-            f[FRAME_EPC] = new_epc;
 
-            return isr_sp;
+            /* Return new SP if syscall triggered context switch. Nested traps
+             * return their own SP to properly unwind the call stack.
+             */
+            ret_sp = (trap_nesting_depth > 1)
+                         ? isr_sp
+                         : (pending_switch_sp ? (uint32_t) pending_switch_sp
+                                              : isr_sp);
+            goto trap_exit;
         }
 
         /* Handle ecall from M-mode - used for yielding in preemptive mode */
@@ -435,8 +463,54 @@ uint32_t do_trap(uint32_t cause, uint32_t epc, uint32_t isr_sp)
              */
             dispatcher(0);
 
-            /* Return the SP to use - new task's frame or current frame */
-            return pending_switch_sp ? (uint32_t) pending_switch_sp : isr_sp;
+            /* Nested traps must return their own SP to unwind properly.
+             * Only the outermost trap performs context switch restoration.
+             * Clear pending switch for nested traps to prevent incorrect
+             * restoration by outer handlers.
+             */
+            if (trap_nesting_depth > 1) {
+                pending_switch_sp = NULL;
+                ret_sp = isr_sp;
+            } else {
+                ret_sp =
+                    pending_switch_sp ? (uint32_t) pending_switch_sp : isr_sp;
+            }
+            goto trap_exit;
+        }
+
+        /* Attempt to recover load/store access faults.
+         *
+         * This assumes all U-mode access faults are PMP-related, which holds
+         * for platforms without MMU where PMP is the sole memory protection.
+         * On MCU hardware, bus faults or access to non-existent memory may
+         * also trigger access exceptions, and terminating the task instead
+         * of panicking could hide such hardware issues.
+         */
+        if (code == 5 || code == 7) {
+            uint32_t mtval = read_csr(mtval);
+            int32_t pmp_result = pmp_handle_access_fault(mtval, code == 7);
+            if (pmp_result == PMP_FAULT_RECOVERED) {
+                /* PMP fault handled successfully, return current frame */
+                return isr_sp;
+            }
+            if (pmp_result == PMP_FAULT_TERMINATE) {
+                /* Task terminated (marked as zombie), switch to next task.
+                 * Print diagnostic before switching. */
+                trap_puts("[PMP] Task terminated: ");
+                trap_puts(code == 7 ? "Store" : "Load");
+                trap_puts(" access fault at 0x");
+                for (int i = 28; i >= 0; i -= 4) {
+                    uint32_t nibble = (mtval >> i) & 0xF;
+                    _putchar(nibble < 10 ? '0' + nibble : 'A' + nibble - 10);
+                }
+                trap_puts("\r\n");
+
+                /* Force context switch to next task */
+                dispatcher(0);
+                ret_sp =
+                    pending_switch_sp ? (uint32_t) pending_switch_sp : isr_sp;
+                goto trap_exit;
+            }
         }
 
         /* Print exception info via direct UART (safe in trap context) */
@@ -457,7 +531,12 @@ uint32_t do_trap(uint32_t cause, uint32_t epc, uint32_t isr_sp)
     }
 
     /* Return the SP to use for context restore - new task's frame or current */
-    return pending_switch_sp ? (uint32_t) pending_switch_sp : isr_sp;
+    ret_sp = pending_switch_sp ? (uint32_t) pending_switch_sp : isr_sp;
+
+trap_exit:
+    /* Decrement trap nesting depth before returning */
+    trap_nesting_depth--;
+    return ret_sp;
 }
 
 /* Enables the machine-level timer interrupt source */

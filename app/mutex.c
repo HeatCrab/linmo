@@ -133,9 +133,8 @@ void monitor_task(void)
             mo_task_yield();
     }
 
-    /* Wait a bit for tasks to fully complete */
-    for (int i = 0; i < 50; i++)
-        mo_task_yield();
+    /* Wait a bit for tasks to fully complete and logs to flush */
+    sys_tdelay(100);
 
     /* Final report */
     printf("\n=== FINAL RESULTS ===\n");
@@ -190,10 +189,10 @@ int32_t app_main(void)
 
     printf("Binary semaphore created successfully\n");
 
-    /* Create tasks */
-    int32_t task_a_id = mo_task_spawn(task_a, 1024);
-    int32_t task_b_id = mo_task_spawn(task_b, 1024);
-    int32_t monitor_id = mo_task_spawn(monitor_task, 1024);
+    /* Create tasks with larger stack for PMP/printf overhead */
+    int32_t task_a_id = mo_task_spawn(task_a, 2048);
+    int32_t task_b_id = mo_task_spawn(task_b, 2048);
+    int32_t monitor_id = mo_task_spawn(monitor_task, 2048);
     int32_t idle_id = mo_task_spawn(idle_task, 512);
 
     if (task_a_id < 0 || task_b_id < 0 || monitor_id < 0 || idle_id < 0) {

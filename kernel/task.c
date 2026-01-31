@@ -8,6 +8,7 @@
 #include <hal.h>
 #include <lib/libc.h>
 #include <lib/queue.h>
+#include <pmp.h>
 #include <sys/task.h>
 
 #include "private/error.h"
@@ -379,6 +380,46 @@ void yield(void);
 void _dispatch(void) __attribute__((weak, alias("dispatch")));
 void _yield(void) __attribute__((weak, alias("yield")));
 
+/* Zombie Task Cleanup
+ *
+ * Scans the task list for terminated (zombie) tasks and frees their resources.
+ * Called from dispatcher to ensure cleanup happens in a safe context.
+ */
+static void task_cleanup_zombies(void)
+{
+    if (!kcb || !kcb->tasks)
+        return;
+
+    list_node_t *node = list_next(kcb->tasks->head);
+    while (node && node != kcb->tasks->tail) {
+        list_node_t *next = list_next(node);
+        tcb_t *tcb = node->data;
+
+        if (tcb && tcb->state == TASK_ZOMBIE) {
+            /* Remove from task list */
+            list_remove(kcb->tasks, node);
+            kcb->task_count--;
+
+            /* Clear from lookup cache */
+            for (int i = 0; i < TASK_CACHE_SIZE; i++) {
+                if (task_cache[i].task == tcb) {
+                    task_cache[i].id = 0;
+                    task_cache[i].task = NULL;
+                }
+            }
+
+            /* Free all resources */
+            if (tcb->mspace)
+                mo_memspace_destroy(tcb->mspace);
+            free(tcb->stack);
+            if (tcb->kernel_stack)
+                free(tcb->kernel_stack);
+            free(tcb);
+        }
+        node = next;
+    }
+}
+
 /* Round-Robin Scheduler Implementation
  *
  * Implements an efficient round-robin scheduler tweaked for small systems.
@@ -559,6 +600,9 @@ void dispatch(void)
     if (unlikely(!kcb || !kcb->task_current || !kcb->task_current->data))
         panic(ERR_NO_TASKS);
 
+    /* Clean up any terminated (zombie) tasks */
+    task_cleanup_zombies();
+
     /* Save current context - only needed for cooperative mode.
      * In preemptive mode, ISR already saved context to stack,
      * so we skip this step to avoid interference.
@@ -648,6 +692,9 @@ void dispatch(void)
         next_task->state = TASK_RUNNING;
     next_task->time_slice = get_priority_timeslice(next_task->prio_level);
 
+    /* Switch PMP configuration if tasks have different memory spaces */
+    pmp_switch_context(prev_task->mspace, next_task->mspace);
+
     /* Perform context switch based on scheduling mode */
     if (kcb->preemptive) {
         /* Same task - no context switch needed */
@@ -688,15 +735,16 @@ void yield(void)
      * READY again.
      */
     if (kcb->preemptive) {
-        /* Trigger one dispatcher call - this will context switch to another
-         * task. When we return here (after being rescheduled), our delay will
-         * have expired.
+        /* Avoid triggering nested traps when already in trap context.
+         * The dispatcher can be invoked directly since the trap handler
+         * environment is already established.
          */
-        __asm__ volatile("ecall");
+        if (trap_nesting_depth > 0) {
+            dispatcher(0);
+        } else {
+            __asm__ volatile("ecall");
+        }
 
-        /* After ecall returns, we've been context-switched back, meaning we're
-         * READY. No need to check state - if we're executing, we're ready.
-         */
         return;
     }
 
@@ -711,7 +759,15 @@ void yield(void)
     /* In cooperative mode, delays are only processed on an explicit yield. */
     list_foreach(kcb->tasks, delay_update, NULL);
 
+    /* Save current task before scheduler modifies task_current */
+    tcb_t *prev_task = (tcb_t *) kcb->task_current->data;
+
     sched_select_next_task(); /* Use O(1) priority scheduler */
+
+    /* Switch PMP configuration if tasks have different memory spaces */
+    tcb_t *next_task = (tcb_t *) kcb->task_current->data;
+    pmp_switch_context(prev_task->mspace, next_task->mspace);
+
     hal_context_restore(((tcb_t *) kcb->task_current->data)->context, 1);
 }
 
@@ -808,6 +864,38 @@ static int32_t task_spawn_internal(void *task_entry,
     } else {
         tcb->kernel_stack = NULL;
         tcb->kernel_stack_size = 0;
+    }
+
+    /* Create memory space for U-mode tasks only.
+     * M-mode tasks do not require PMP memory protection.
+     */
+    if (tcb->mode) {
+        tcb->mspace = mo_memspace_create(kcb->next_tid, 0);
+        if (!tcb->mspace) {
+            free(tcb->kernel_stack);
+            free(tcb->stack);
+            free(tcb);
+            panic(ERR_TCB_ALLOC);
+        }
+
+        /* Register stack as flexpage */
+        fpage_t *stack_fpage =
+            mo_fpage_create((uint32_t) tcb->stack, new_stack_size,
+                            PMPCFG_R | PMPCFG_W, PMP_PRIORITY_STACK);
+        if (!stack_fpage) {
+            mo_memspace_destroy(tcb->mspace);
+            free(tcb->kernel_stack);
+            free(tcb->stack);
+            free(tcb);
+            panic(ERR_TCB_ALLOC);
+        }
+
+        /* Add stack to memory space */
+        stack_fpage->as_next = tcb->mspace->first;
+        tcb->mspace->first = stack_fpage;
+        tcb->mspace->pmp_stack = stack_fpage;
+    } else {
+        tcb->mspace = NULL;
     }
 
     /* Add to task list only after all allocations complete */
@@ -935,6 +1023,8 @@ int32_t mo_task_cancel(uint16_t id)
     CRITICAL_LEAVE();
 
     /* Free memory outside critical section */
+    if (tcb->mspace)
+        mo_memspace_destroy(tcb->mspace);
     free(tcb->stack);
     if (tcb->kernel_stack)
         free(tcb->kernel_stack);

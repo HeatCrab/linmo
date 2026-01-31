@@ -11,7 +11,7 @@ TOOLCHAIN_TYPE=${TOOLCHAIN_TYPE:-gnu}
 declare -A FUNCTIONAL_TESTS
 FUNCTIONAL_TESTS["mutex"]="Fairness: PASS,Mutual Exclusion: PASS,Data Consistency: PASS,Overall: PASS"
 FUNCTIONAL_TESTS["semaphore"]="Overall: PASS"
-FUNCTIONAL_TESTS["umode"]="PASS: sys_tid() returned,PASS: sys_uptime() returned,[EXCEPTION] Illegal instruction"
+FUNCTIONAL_TESTS["umode"]="[PASS] returned tid=,[PASS] returned uptime=,[EXCEPTION] Illegal instruction"
 #FUNCTIONAL_TESTS["test64"]="Unsigned Multiply: PASS,Unsigned Divide: PASS,Signed Multiply: PASS,Signed Divide: PASS,Left Shifts: PASS,Logical Right Shifts: PASS,Arithmetic Right Shifts: PASS,Overall: PASS"
 #FUNCTIONAL_TESTS["suspend"]="Suspend: PASS,Resume: PASS,Self-Suspend: PASS,Overall: PASS"
 
