@@ -116,24 +116,12 @@ static int _getpid(void)
     return 1;
 }
 
+/* linmo uses fixed heap via mo_heap_init, sbrk is not applicable */
 static int _sbrk(int incr)
 {
-    extern uint32_t _end, _stack;
-    static char *brk = (char *) &_end;
-    char *prev = brk;
-
-    if (unlikely(incr < 0)) {
-        errno = EINVAL;
-        return -1;
-    }
-
-    if (unlikely(brk + incr >= (char *) &_stack)) {
-        errno = ENOMEM;
-        return -1;
-    }
-
-    brk += incr;
-    return (int) prev;
+    (void) incr;
+    errno = ENOMEM;
+    return -1;
 }
 
 static int _usleep(int usec)
@@ -180,7 +168,7 @@ static int _read(int file, char *ptr, int len)
         return -1;
     }
 
-    if (unlikely(file < 0)) {
+    if (unlikely(file < 0 || file > 2)) {
         errno = EBADF;
         return -1;
     }
@@ -199,7 +187,7 @@ static int _write(int file, char *ptr, int len)
         return -1;
     }
 
-    if (unlikely(file < 0)) {
+    if (unlikely(file < 0 || file > 2)) {
         errno = EBADF;
         return -1;
     }
